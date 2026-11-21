@@ -1,0 +1,52 @@
+name: Verify StopWatch firmware
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  simulate:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: "3.12"
+      - name: Build desktop core
+        run: |
+          python tools/prepare.py
+          python -m pip install -e ./build/watch
+          hermes-gadget build-sim --test
+      - name: Test fixture Hub and round screen
+        run: python tools/check_local.py --output dist/screens
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: round-screen-screenshots
+          path: dist/screens/*.png
+          if-no-files-found: error
+  firmware:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: "3.12"
+      - name: Build and package StopWatch C152
+        run: |
+          python -m pip install platformio==6.1.19
+          python tools/build_firmware.py
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: stopwatch-token-monitor
+          path: dist/watch/
+          if-no-files-found: error

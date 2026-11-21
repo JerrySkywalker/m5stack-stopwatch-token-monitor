@@ -1,0 +1,3 @@
+[submodule "hermes-gadget-sdk"]
+	path = upstream/hermes-gadget-sdk
+	url = https://github.com/Adolanium/hermes-gadget-sdk.git
