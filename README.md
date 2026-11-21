@@ -25,6 +25,8 @@ to switch between English and Simplified Chinese. Tap **Refresh interval**
 to cycle through 30 seconds, 1 minute (default), 2 minutes, 5 minutes and
 15 minutes. The watch remembers both settings after reboot. **Refresh now**
 requests a fresh snapshot and returns to the current dashboard view.
+The USB console's `factory-reset` also clears the saved dashboard settings
+and relay provisioning on the next boot.
 
 点按标题或齿轮进入设置。点按「语言」切换简体中文与英文。点按「拉取间隔」
 可在 30 秒、1 分钟（默认）、2 分钟、5 分钟和 15 分钟之间切换，重启后仍保留。

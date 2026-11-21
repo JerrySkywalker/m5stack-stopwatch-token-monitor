@@ -214,12 +214,25 @@ def standalone(body, recovered, output):
             assert restarted.console("tm mode watch") == "@ok simulator mode"
             state = sim_status(restarted)
             assert state["language"] == "zh" and state["interval_seconds"] == 120
+            assert state["relay_configured"] and state["authenticated"]
             assert restarted.console("tm language en") == "@ok Token Monitor"
             assert restarted.console("tm interval 60") == "@ok Token Monitor"
             state = sim_status(restarted)
             assert state["language"] == "en" and state["interval_seconds"] == 60
+            assert restarted.console("tm language zh") == "@ok Token Monitor"
+            assert restarted.console("tm interval 900") == "@ok Token Monitor"
+            assert restarted.console("factory-reset").startswith("@ok factory-reset")
         finally:
             restarted.close()
+        reset = Simulator(board="sim-466x466-round", state_dir=state_dir)
+        try:
+            reset.start()
+            assert reset.console("tm mode watch") == "@ok simulator mode"
+            state = sim_status(reset)
+            assert state["language"] == "en" and state["interval_seconds"] == 60
+            assert not state["relay_configured"] and not state["authenticated"]
+        finally:
+            reset.close()
 
 
 def combined(url, body, output):

@@ -112,6 +112,11 @@ def prepare(output, profile):
     token_monitor_.draw(*hal_.display, t, network_up_, false);"""),
             ('  if (cmd == "status") return "@status " + status_json();',
              '  if (cmd == "tm") return token_monitor_command(rest);\n  if (cmd == "status") return "@status " + status_json();'),
+            ('    if (cmd == "factory-reset") {\n      for (const char* k : kSettingKeys)',
+             '''    if (cmd == "factory-reset") {
+      for (const char* key : {"tm_lang", "tm_interval", "tm_endpoint", "tm_token"})
+        hal_.storage->erase(key);
+      for (const char* k : kSettingKeys)'''),
             ('@help commands: status |', '@help commands: status | tm |'),
         ],
         "firmware/core/src/app_perf.cpp": [
