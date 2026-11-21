@@ -5,10 +5,12 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <iterator>
 #include <string>
 
 #include "hg/canvas.hpp"
 #include "hg/font.hpp"
+#include "hg/font_cjk.hpp"
 
 namespace stopwatch {
 namespace {
@@ -30,6 +32,36 @@ constexpr uint16_t kBright = hg::rgb565(232, 247, 249);
 constexpr uint16_t kMuted = hg::rgb565(155, 176, 186);
 constexpr uint16_t kTeal = hg::rgb565(68, 230, 203);
 constexpr uint16_t kOrange = hg::rgb565(255, 182, 96);
+
+#include "token_monitor_glyphs.inc"
+
+const uint8_t* dashboard_glyph(char32_t character) {
+  if (character < 128) return nullptr;
+  const auto* point = std::lower_bound(std::begin(kDashboardCodepoints), std::end(kDashboardCodepoints), character);
+  if (point == std::end(kDashboardCodepoints) || *point != character) return nullptr;
+  return kDashboardBitmaps[point - kDashboardCodepoints];
+}
+
+struct TextMeasure {
+  size_t bytes;
+  size_t columns;
+};
+
+TextMeasure measure_text(std::string_view text, size_t limit) {
+  TextMeasure measured{0, 0};
+  for (size_t next = 0; next < text.size();) {
+    const auto character = hg::font::next(text, next);
+    const size_t width = dashboard_glyph(character) ? 2 : hg::font::columns(character);
+    if (measured.columns + width > limit) break;
+    measured = {next, measured.columns + width};
+  }
+  return measured;
+}
+
+int text_width(std::string_view text, int scale) {
+  if (text.empty()) return 0;
+  return static_cast<int>(measure_text(text, text.size() * 2).columns) * hg::font::kCellWidth * scale - scale;
+}
 
 std::string compact(const Value& value) {
   const double amount = value.as_number(-1);
@@ -69,20 +101,33 @@ std::string age(int64_t seconds, bool zh) {
 }
 
 void text_at(Canvas& c, int x, int y, std::string_view text, int scale, uint16_t color) {
-  c.text(x, y - hg::font::kAsciiYOffset * scale, text, scale, color);
+  constexpr int size = hg::font::kCjkSize;
+  for (size_t i = 0; i < text.size();) {
+    const size_t start = i;
+    const auto character = hg::font::next(text, i);
+    if (const uint8_t* glyph = dashboard_glyph(character)) {
+      for (int bit = 0; bit < size * size; ++bit) {
+        if ((glyph[bit >> 3] >> (7 - (bit & 7))) & 1)
+          c.fill_rect(x + (bit % size) * scale, y + (bit / size - 3) * scale, scale, scale, color);
+      }
+      x += size * scale;
+    } else {
+      x = c.text(x, y - hg::font::kAsciiYOffset * scale, text.substr(start, i - start), scale, color);
+    }
+  }
 }
 
 void centered(Canvas& c, int y, std::string_view text, int scale, uint16_t color) {
-  text_at(c, (c.width() - Canvas::text_width(text, scale)) / 2, y, text, scale, color);
+  text_at(c, (c.width() - text_width(text, scale)) / 2, y, text, scale, color);
 }
 
 void right(Canvas& c, int x, int y, std::string_view text, int scale, uint16_t color) {
-  text_at(c, x - Canvas::text_width(text, scale), y, text, scale, color);
+  text_at(c, x - text_width(text, scale), y, text, scale, color);
 }
 
 void name_at(Canvas& c, int x, int y, std::string_view title, size_t columns, uint16_t color = kBright) {
-  if (hg::font::length(title) > columns) {
-    const auto cropped = std::string(title.substr(0, hg::font::prefix(title, columns - 1))) + "~";
+  if (measure_text(title, columns).bytes < title.size()) {
+    const auto cropped = std::string(title.substr(0, measure_text(title, columns - 1).bytes)) + "~";
     text_at(c, x, y, cropped, 2, color);
     return;
   }

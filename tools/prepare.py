@@ -3,6 +3,7 @@
 import argparse
 import io
 import pathlib
+import re
 import subprocess
 import tarfile
 
@@ -21,6 +22,39 @@ def update(destination, data):
     if not destination.is_file() or destination.read_bytes() != data:
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(data)
+
+
+def dashboard_glyphs(upstream_font, dashboard):
+    def hex_values(name):
+        table = re.search(rf"{name}\[\]\s*=\s*\{{([^}}]+)\}};", upstream_font)
+        if not table:
+            raise ValueError(f"Missing {name} in SDK font")
+        return [int(value, 16) for value in re.findall(r"0x[\dA-Fa-f]+", table[1])]
+
+    codepoints = hex_values("kCjkCodepoints")
+    bitmaps = hex_values("kCjkBitmaps")
+    literals = re.findall(r'"(?:[^"\\]|\\.)*"', dashboard)
+    needed = sorted({ord(character) for literal in literals for character in literal if ord(character) > 127})
+    if len(bitmaps) != 18 * len(codepoints):
+        raise ValueError("SDK font does not contain 18 bytes per glyph")
+    index = {cp: i for i, cp in enumerate(codepoints)}
+    missing = set(needed) - index.keys()
+    if not needed or missing:
+        raise ValueError(f"Dashboard glyphs missing from the SDK font: {sorted(missing)}")
+
+    points = ", ".join(f"0x{cp:04X}" for cp in needed)
+    rows = []
+    for cp in needed:
+        start = index[cp] * 18
+        pixels = ", ".join(f"0x{byte:02X}" for byte in bitmaps[start:start + 18])
+        rows.append(f"    {{{pixels}}},")
+    return (
+        "// Subset of the SDK's Fusion Pixel Font bitmaps (SIL OFL 1.1).\n"
+        f"constexpr char32_t kDashboardCodepoints[] = {{{points}}};\n"
+        "constexpr uint8_t kDashboardBitmaps[][18] = {\n"
+        + "\n".join(rows)
+        + "\n};\n"
+    ).encode("ascii")
 
 
 def prepare(output, profile):
@@ -43,11 +77,6 @@ def prepare(output, profile):
         raise ValueError("Use separate build directories for distinct profiles and upstream pins")
 
     patches = {
-        "firmware/CMakeLists.txt": [
-            ("add_subdirectory(core)\n", "add_subdirectory(core)\nhg_core_library(hg_core_cjk ON)\n"),
-            ("target_link_libraries(hgsim PRIVATE hg_core)", "target_link_libraries(hgsim PRIVATE hg_core_cjk)"),
-            ("  hg_core_library(hg_core_cjk ON)\n", ""),
-        ],
         "firmware/core/CMakeLists.txt": [
             ("    src/app.cpp\n", "    src/app.cpp\n    src/token_monitor.cpp\n    src/token_monitor_app.cpp\n"),
         ],
@@ -158,9 +187,6 @@ def prepare(output, profile):
         ],
         "firmware/esp32/platformio.ini": [
             ("platform = espressif32\n", "platform = platformio/espressif32@8.0.0\n"),
-            ('    -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;boards/m5stack-stopwatch/sdkconfig.defaults"\n',
-             '    -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;boards/m5stack-stopwatch/sdkconfig.defaults"\n'
-             '    -DHG_CJK_FONT=ON\n'),
         ],
     }
     overlays = {
@@ -191,6 +217,11 @@ def prepare(output, profile):
         raise ValueError(f"Missing upstream files for {', '.join(patches)}")
     for destination, source in overlays.items():
         update(output / destination, (ROOT / "firmware" / source).read_bytes())
+    glyphs = dashboard_glyphs(
+        (output / "firmware/core/src/font_cjk_data.cpp").read_text(encoding="utf-8"),
+        (ROOT / "firmware/token_monitor.cpp").read_text(encoding="utf-8"),
+    )
+    update(output / "firmware/core/src/token_monitor_glyphs.inc", glyphs)
     definition = f"#pragma once\n#define STOPWATCH_COMBINED {int(profile == 'personal')}\n#if CONFIG_HG_BOARD_STOPWATCH\n#define STOPWATCH_TLS_TIME 1\n#else\n#define STOPWATCH_TLS_TIME 0\n#endif\n"
     update(output / "firmware/esp32/main/stopwatch_profile.hpp", definition.encode())
     print(output)
