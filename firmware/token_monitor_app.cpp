@@ -1,6 +1,7 @@
 #include "hg/app.hpp"
 
 #include <algorithm>
+#include <charconv>
 #include <cctype>
 #include <cstdlib>
 #include <utility>
@@ -11,6 +12,14 @@ namespace {
 constexpr std::string_view kPath = "/watch/v1/snapshot";
 constexpr size_t kMaxEndpoint = 190;
 constexpr size_t kMaxToken = 192;
+
+uint32_t refresh_seconds(std::string_view value) {
+  uint32_t seconds = 0;
+  const auto parsed = std::from_chars(value.data(), value.data() + value.size(), seconds);
+  if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() ||
+      !stopwatch::valid_refresh_seconds(seconds)) return 0;
+  return seconds;
+}
 
 bool clean_token(std::string_view token) {
   return token.size() <= kMaxToken &&
@@ -57,9 +66,28 @@ void App::token_monitor_load() {
   if (!token_monitor_.enabled()) return;
   auto endpoint = setting("tm_endpoint");
   auto token = setting("tm_token");
+  token_monitor_.set_language(setting("tm_lang") == "zh" ? stopwatch::Language::Chinese
+                                                        : stopwatch::Language::English);
+  if (const auto seconds = refresh_seconds(setting("tm_interval")))
+    token_monitor_.set_refresh_seconds(seconds);
   const bool lab = endpoint.substr(0, 7) == "http://";
   if (endpoint_valid(endpoint, lab)) tm_endpoint_ = std::move(endpoint);
   if (!lab && clean_token(token)) tm_token_ = std::move(token);
+}
+
+bool App::token_monitor_set_language(stopwatch::Language language) {
+  if (language == token_monitor_.language()) return true;
+  if (!hal_.storage || !hal_.storage->set("tm_lang", language == stopwatch::Language::Chinese ? "zh" : "en"))
+    return false;
+  token_monitor_.set_language(language);
+  return true;
+}
+
+bool App::token_monitor_set_interval(uint32_t seconds) {
+  if (seconds == token_monitor_.refresh_seconds()) return true;
+  if (!hal_.storage || !hal_.storage->set("tm_interval", std::to_string(seconds))) return false;
+  token_monitor_.set_refresh_seconds(seconds);
+  return true;
 }
 
 bool App::token_monitor_screen(Screen screen) const {
@@ -87,9 +115,20 @@ bool App::token_monitor_touch(bool down, int x, int y, uint32_t when, bool allow
   }
   activity_at_ = now();
   clock_showing_ = false;
-  bool settings = false;
-  token_monitor_.touch(down, x, y, when, settings);
-  if (settings) open_settings();
+  switch (token_monitor_.touch(down, x, y, when)) {
+    case stopwatch::TouchAction::HermesSettings:
+      open_settings();
+      break;
+    case stopwatch::TouchAction::Language:
+      token_monitor_set_language(token_monitor_.language() == stopwatch::Language::English
+                                     ? stopwatch::Language::Chinese : stopwatch::Language::English);
+      break;
+    case stopwatch::TouchAction::Interval:
+      token_monitor_set_interval(stopwatch::next_refresh_seconds(token_monitor_.refresh_seconds()));
+      break;
+    case stopwatch::TouchAction::None:
+      break;
+  }
   if (!down) update_model();
   return true;
 }
@@ -106,6 +145,7 @@ std::string App::token_monitor_command(std::string_view args) {
 #if !defined(ESP_PLATFORM)
   if (args == "mode combined" || args == "mode watch" || args == "mode off") {
     token_monitor_enable(args != "mode off", args != "mode watch");
+    token_monitor_load();
     update_model();
     return "@ok simulator mode";
   }
@@ -118,11 +158,23 @@ std::string App::token_monitor_command(std::string_view args) {
         .set("data", token_monitor_.has_data())
         .set("relay_configured", !tm_endpoint_.empty())
         .set("authenticated", !tm_token_.empty())
+        .set("language", token_monitor_.language() == stopwatch::Language::Chinese ? "zh" : "en")
+        .set("interval_seconds", token_monitor_.refresh_seconds())
         .set("status", tm_http_status_)
         .set("refresh_requested", token_monitor_.refresh_id());
     return "@tm " + result.dump();
   }
   if (args == "refresh") token_monitor_.refresh();
+  else if (args == "settings" || args == "back") token_monitor_.open_settings(args == "settings");
+  else if (args == "language en" || args == "language zh") {
+    if (!token_monitor_set_language(args == "language zh" ? stopwatch::Language::Chinese
+                                                          : stopwatch::Language::English))
+      return "@error unable to store language";
+  } else if (args.substr(0, 9) == "interval ") {
+    const auto seconds = refresh_seconds(args.substr(9));
+    if (!seconds) return "@error refresh interval must be 30, 60, 120, 300 or 900 seconds";
+    if (!token_monitor_set_interval(seconds)) return "@error unable to store refresh interval";
+  }
   else if (args == "next") token_monitor_.next(1);
   else if (args == "previous") token_monitor_.next(-1);
   else if (args == "detail") token_monitor_.detail();
@@ -156,7 +208,8 @@ std::string App::token_monitor_command(std::string_view args) {
     token_monitor_.reset();
   } else {
     return "@error tm status | endpoint <HTTPS URL> | lab <private HTTP URL> | token <value> | "
-           "clear-token | clear-endpoint | refresh | next | previous | detail | show | hide";
+           "clear-token | clear-endpoint | settings | back | language en/zh | "
+           "interval <seconds> | refresh | next | previous | detail | show | hide";
   }
   update_model();
   return "@ok Token Monitor";

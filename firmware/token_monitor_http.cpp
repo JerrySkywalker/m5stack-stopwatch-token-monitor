@@ -113,7 +113,7 @@ void token_monitor_http_tick(hg::App& app) {
       if (sent == refresh) {
         const bool ok = response ? app.token_monitor_apply(response->body, response->status)
                                  : app.token_monitor_apply({}, 0);
-        next_at = now + pdMS_TO_TICKS(ok ? 60000 : 15000);
+        next_at = now + pdMS_TO_TICKS(ok ? app.token_monitor_refresh_seconds() * 1000 : 15000);
       }
     }
   }

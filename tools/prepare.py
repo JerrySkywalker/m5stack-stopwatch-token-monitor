@@ -43,6 +43,11 @@ def prepare(output, profile):
         raise ValueError("Use separate build directories for distinct profiles and upstream pins")
 
     patches = {
+        "firmware/CMakeLists.txt": [
+            ("add_subdirectory(core)\n", "add_subdirectory(core)\nhg_core_library(hg_core_cjk ON)\n"),
+            ("target_link_libraries(hgsim PRIVATE hg_core)", "target_link_libraries(hgsim PRIVATE hg_core_cjk)"),
+            ("  hg_core_library(hg_core_cjk ON)\n", ""),
+        ],
         "firmware/core/CMakeLists.txt": [
             ("    src/app.cpp\n", "    src/app.cpp\n    src/token_monitor.cpp\n    src/token_monitor_app.cpp\n"),
         ],
@@ -57,6 +62,7 @@ def prepare(output, profile):
   const std::string& token_monitor_endpoint() const { return tm_endpoint_; }
   const std::string& token_monitor_token() const { return tm_token_; }
   uint32_t token_monitor_refresh_id() const { return token_monitor_.refresh_id(); }
+  uint32_t token_monitor_refresh_seconds() const { return token_monitor_.refresh_seconds(); }
   bool token_monitor_apply(std::string_view body, int status);
   bool token_monitor_touch(bool down, int x, int y, uint32_t when, bool allow_start);"""),
             ("  std::string server_url_;", """  std::string server_url_;
@@ -66,6 +72,8 @@ def prepare(output, profile):
   bool tm_touch_wake_ = false;
   int tm_http_status_ = 0;
   void token_monitor_load();
+  bool token_monitor_set_language(stopwatch::Language language);
+  bool token_monitor_set_interval(uint32_t seconds);
   bool token_monitor_screen(Screen screen) const;
   std::string token_monitor_command(std::string_view args);"""),
         ],
@@ -145,6 +153,9 @@ def prepare(output, profile):
         ],
         "firmware/esp32/platformio.ini": [
             ("platform = espressif32\n", "platform = platformio/espressif32@8.0.0\n"),
+            ('    -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;boards/m5stack-stopwatch/sdkconfig.defaults"\n',
+             '    -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;boards/m5stack-stopwatch/sdkconfig.defaults"\n'
+             '    -DHG_CJK_FONT=ON\n'),
         ],
     }
     overlays = {

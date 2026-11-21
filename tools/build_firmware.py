@@ -48,6 +48,10 @@ def main():
             files[destination.name] = {"sha256": digest, "bytes": len(data)}
         for notice in ("LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md"):
             shutil.copyfile(build / notice, out / ("hermes-gadget-" + notice))
+        licenses = out / "LICENSES"
+        licenses.mkdir(exist_ok=True)
+        for font_license in ("Fusion-Pixel-OFL.txt", "Ark-Pixel-OFL.txt", "Cubic-11-License.txt", "Galmuri-OFL.txt"):
+            shutil.copyfile(build / "LICENSES" / font_license, licenses / font_license)
         shutil.copyfile(ROOT / "LICENSE", out / "LICENSE")
         receipt = {
             "board": "M5Stack StopWatch C152",

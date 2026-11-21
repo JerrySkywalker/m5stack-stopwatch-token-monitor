@@ -120,6 +120,42 @@ def swipe_left(sim):
     sim.run_for(0.08)
 
 
+def tap_at(sim, x, y):
+    sim.touch(True, x, y)
+    sim.run_for(0.08)
+    sim.touch(False)
+    sim.run_for(0.08)
+
+
+def settings_ui(sim, output):
+    swipe_left(sim)
+    assert sim_status(sim)["page"] == "Quotas"
+    assert sim_status(sim)["language"] == "en"
+    assert sim_status(sim)["interval_seconds"] == 60
+    tap_at(sim, 350, 91)
+    assert sim_status(sim)["page"] == "Settings"
+    english = sim.screenshot(output / "8-settings-en.png").read_bytes()
+    tap_at(sim, 305, 150)
+    assert sim_status(sim)["language"] == "zh"
+    chinese = sim.screenshot(output / "9-settings-zh.png").read_bytes()
+    assert chinese != english
+    for interval in (120, 300, 900, 30, 60, 120):
+        before = sim_status(sim)["refresh_requested"]
+        tap_at(sim, 302, 220)
+        state = sim_status(sim)
+        assert state["interval_seconds"] == interval and state["refresh_requested"] == before + 1
+    for invalid in ("0", "61", "4294967296", "60s"):
+        assert sim.console(f"tm interval {invalid}").startswith("@error")
+    assert sim_status(sim)["interval_seconds"] == 120
+    tap_at(sim, 240, 360)
+    assert sim_status(sim)["page"] == "Quotas"
+    sim.screenshot(output / "10-quotas-zh.png")
+    tap_at(sim, 350, 91)
+    before = sim_status(sim)["refresh_requested"]
+    tap_at(sim, 305, 280)
+    assert sim_status(sim)["page"] == "Quotas" and sim_status(sim)["refresh_requested"] == before + 1
+
+
 def same_ui(sim, body, recovered, output):
     assert sim.console("tm inject " + body) == "@ok snapshot"
     labels = ("Overview", "Quotas", "Trend", "Devices")
@@ -155,19 +191,35 @@ def same_ui(sim, body, recovered, output):
 
 def standalone(body, recovered, output):
     from hermes_gadget.sim import Simulator
+    from tempfile import TemporaryDirectory
 
-    sim = Simulator(board="sim-466x466-round", state_dir=output / "watch-nvs")
-    try:
-        sim.start()
-        assert sim.console("tm mode watch") == "@ok simulator mode"
-        assert sim.wait_for(lambda: sim_status(sim)["visible"], timeout=8)
-        same_ui(sim, body, recovered, output)
-        before = sim_status(sim)["refresh_requested"]
-        sim.tap("talk")
-        sim.run_for(0.10)
-        assert sim_status(sim)["refresh_requested"] == before + 1
-    finally:
-        sim.close()
+    with TemporaryDirectory(prefix="stopwatch-tests-") as directory:
+        state_dir = Path(directory)
+        sim = Simulator(board="sim-466x466-round", state_dir=state_dir)
+        try:
+            sim.start()
+            assert sim.console("tm mode watch") == "@ok simulator mode"
+            assert sim.wait_for(lambda: sim_status(sim)["visible"], timeout=8)
+            same_ui(sim, body, recovered, output)
+            before = sim_status(sim)["refresh_requested"]
+            sim.tap("talk")
+            sim.run_for(0.10)
+            assert sim_status(sim)["refresh_requested"] == before + 1
+            settings_ui(sim, output)
+        finally:
+            sim.close()
+        restarted = Simulator(board="sim-466x466-round", state_dir=state_dir)
+        try:
+            restarted.start()
+            assert restarted.console("tm mode watch") == "@ok simulator mode"
+            state = sim_status(restarted)
+            assert state["language"] == "zh" and state["interval_seconds"] == 120
+            assert restarted.console("tm language en") == "@ok Token Monitor"
+            assert restarted.console("tm interval 60") == "@ok Token Monitor"
+            state = sim_status(restarted)
+            assert state["language"] == "en" and state["interval_seconds"] == 60
+        finally:
+            restarted.close()
 
 
 def combined(url, body, output):

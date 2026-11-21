@@ -13,10 +13,22 @@ same dashboard and data format. This is a community project.
 | Devices | Per-device totals and freshness without exposing hostnames by default |
 
 Swipe horizontally to change views. Tap the body or swipe up to cycle the
-current view's details. Tap the footer to refresh, or hold the title and
-release to open hardware settings. The standalone blue button refreshes and
+current view's details. Tap the footer to refresh. Hold the title and
+release to open the Hermes Gadget hardware settings. The standalone blue button refreshes and
 the yellow button advances a page. In the personal profile the blue button
 retains its Hermes push-to-talk behavior.
+
+## Dashboard settings / 看板设置
+
+Tap the title or gear to open the dashboard settings. Tap **Language**
+to switch between English and Simplified Chinese. Tap **Refresh interval**
+to cycle through 30 seconds, 1 minute (default), 2 minutes, 5 minutes and
+15 minutes. The watch remembers both settings after reboot. **Refresh now**
+requests a fresh snapshot and returns to the current dashboard view.
+
+点按标题或齿轮进入设置。点按「语言」切换简体中文与英文。点按「拉取间隔」
+可在 30 秒、1 分钟（默认）、2 分钟、5 分钟和 15 分钟之间切换，重启后仍保留。
+「立即刷新」会请求新的快照，并返回原来的页面。
 
 ## Simulator and local verification
 
@@ -33,8 +45,8 @@ python tools/show_simulator.py
 ~~~
 
 The headless test runs a synthetic authenticated Hub and the real adapter over
-loopback, exercises all four pages with actual simulated touch, checks failure
-and recovery, and verifies a local Gadget voice-state round trip from the
+loopback, exercises all four pages and both languages with simulated touch,
+checks settings persistence, failure and recovery, and verifies a local Gadget voice-state round trip from the
 dashboard. It saves PNGs suitable for human or automated review. It uses
 synthetic data and a local echo gateway.
 
@@ -74,13 +86,17 @@ watch. Run the adapter behind your HTTPS reverse proxy on a protected
 loopback or service network. The Hub secret is used only by the adapter.
 
 Use the upstream Wi-Fi setup and a **USB console** at 115200 baud to provision
-the watch. The `tm status` command reports configuration and HTTP state only.
+the watch. The `tm status` command reports configuration and HTTP state without
+revealing the relay token.
 
 ~~~text
 tm endpoint https://relay.example/watch/v1/snapshot
 tm token YOUR_WATCH_ONLY_TOKEN
 tm refresh
 tm status
+tm settings
+tm language zh
+tm interval 120
 ~~~
 
 For a local Wi-Fi demo with synthetic data, explicitly bind the fixture server

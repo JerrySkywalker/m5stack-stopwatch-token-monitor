@@ -11,6 +11,13 @@
 namespace stopwatch {
 
 constexpr size_t kMaxSnapshot = 8192;
+constexpr uint32_t kDefaultRefreshSeconds = 60;
+
+enum class Language { English, Chinese };
+enum class TouchAction { None, HermesSettings, Language, Interval };
+
+bool valid_refresh_seconds(uint32_t seconds);
+uint32_t next_refresh_seconds(uint32_t seconds);
 
 class TokenMonitor {
  public:
@@ -24,12 +31,17 @@ class TokenMonitor {
   void reset();
   void next(int step);
   void detail();
+  void open_settings(bool open);
+  void set_language(Language language);
+  Language language() const { return language_; }
+  void set_refresh_seconds(uint32_t seconds);
+  uint32_t refresh_seconds() const { return refresh_seconds_; }
   void refresh() { ++refresh_id_; }
   uint32_t refresh_id() const { return refresh_id_; }
   bool has_data() const { return data_.is_object(); }
   const char* page_name() const;
   void draw(hg::Display& display, uint32_t now, bool network, bool force);
-  void touch(bool down, int x, int y, uint32_t now, bool& settings);
+  TouchAction touch(bool down, int x, int y, uint32_t now);
   void cancel_touch() { touching_ = false; }
   bool touching() const { return touching_; }
 
@@ -38,11 +50,14 @@ class TokenMonitor {
   uint32_t received_at_ = 0;
   uint32_t refresh_id_ = 0;
   uint32_t last_frame_ = 0;
+  uint32_t refresh_seconds_ = kDefaultRefreshSeconds;
+  Language language_ = Language::English;
   int page_ = 0;
   size_t detail_ = 0;
   bool enabled_ = false;
   bool combined_ = true;
   bool hidden_ = false;
+  bool settings_open_ = false;
   bool dirty_ = true;
   bool failed_ = false;
   bool network_ = false;

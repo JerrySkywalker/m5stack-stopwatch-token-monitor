@@ -1,12 +1,14 @@
 #include "hg/token_monitor.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
 
 #include "hg/canvas.hpp"
+#include "hg/font.hpp"
 
 namespace stopwatch {
 namespace {
@@ -16,6 +18,11 @@ using hg::json::Value;
 
 constexpr int kRows = 4;
 constexpr const char* kPages[] = {"Overview", "Quotas", "Trend", "Devices"};
+constexpr const char* kPagesZh[] = {"总览", "额度", "趋势", "设备"};
+constexpr std::array<uint32_t, 5> kIntervals{30, kDefaultRefreshSeconds, 120, 300, 900};
+constexpr int kSettingsTop = 132;
+constexpr int kSettingsStep = 66;
+constexpr int kSettingsHeight = 51;
 constexpr uint16_t kBackground = hg::rgb565(0, 0, 0);
 constexpr uint16_t kPanel = hg::rgb565(12, 23, 30);
 constexpr uint16_t kTrack = hg::rgb565(18, 47, 53);
@@ -45,56 +52,76 @@ std::string usd(const Value& value) {
   return text;
 }
 
-std::string age(int64_t seconds) {
+const char* tr(bool zh, const char* english, const char* chinese) {
+  return zh ? chinese : english;
+}
+
+std::string age(int64_t seconds, bool zh) {
   if (seconds < 0) return "--";
-  if (seconds < 60) return "<1m";
-  if (seconds < 3600) return std::to_string(seconds / 60) + "m";
-  if (seconds < 86400) return std::to_string(seconds / 3600) + "h " +
-                               std::to_string((seconds / 60) % 60) + "m";
-  return std::to_string(seconds / 86400) + "d " + std::to_string((seconds / 3600) % 24) + "h";
+  const char* mins = tr(zh, "m", "分");
+  const char* hours = tr(zh, "h", "时");
+  if (seconds < 60) return tr(zh, "<1m", "<1分");
+  if (seconds < 3600) return std::to_string(seconds / 60) + mins;
+  if (seconds < 86400) return std::to_string(seconds / 3600) + hours + " " +
+                               std::to_string((seconds / 60) % 60) + mins;
+  return std::to_string(seconds / 86400) + tr(zh, "d", "天") + " " +
+         std::to_string((seconds / 3600) % 24) + hours;
+}
+
+void text_at(Canvas& c, int x, int y, std::string_view text, int scale, uint16_t color) {
+  c.text(x, y - hg::font::kAsciiYOffset * scale, text, scale, color);
 }
 
 void centered(Canvas& c, int y, std::string_view text, int scale, uint16_t color) {
-  c.text((c.width() - Canvas::text_width(text, scale)) / 2, y, text, scale, color);
+  text_at(c, (c.width() - Canvas::text_width(text, scale)) / 2, y, text, scale, color);
 }
 
 void right(Canvas& c, int x, int y, std::string_view text, int scale, uint16_t color) {
-  c.text(x - Canvas::text_width(text, scale), y, text, scale, color);
+  text_at(c, x - Canvas::text_width(text, scale), y, text, scale, color);
 }
 
-void name_at(Canvas& c, int x, int y, std::string_view title, size_t max_chars, uint16_t color = kBright) {
-  std::string cropped(title.substr(0, max_chars));
-  for (char& chr : cropped) {
-    if (chr < ' ' || chr > '~') chr = '?';
+void name_at(Canvas& c, int x, int y, std::string_view title, size_t columns, uint16_t color = kBright) {
+  if (hg::font::length(title) > columns) {
+    const auto cropped = std::string(title.substr(0, hg::font::prefix(title, columns - 1))) + "~";
+    text_at(c, x, y, cropped, 2, color);
+    return;
   }
-  if (title.size() > max_chars && cropped.size() > 1) cropped.back() = '~';
-  c.text(x, y, cropped, 2, color);
+  text_at(c, x, y, title, 2, color);
 }
 
 void card(Canvas& c, int y, int height) {
   c.fill_round_rect(76, y, 314, height, 9, kPanel);
 }
 
-void overview(Canvas& c, const Value& data, bool models) {
-  centered(c, 123, "TODAY TOKENS", 2, kMuted);
+void settings_icon(Canvas& c) {
+  constexpr int x = 350, y = 91;
+  c.fill_rect(x - 2, y - 11, 5, 23, kMuted);
+  c.fill_rect(x - 11, y - 2, 23, 5, kMuted);
+  c.fill_circle(x, y, 8, kMuted);
+  c.fill_circle(x, y, 4, kBackground);
+}
+
+void overview(Canvas& c, const Value& data, bool models, bool zh) {
+  centered(c, 123, tr(zh, "TODAY TOKENS", "今日用量"), 2, kMuted);
   centered(c, 145, compact(data["today"]["tokens"]), 5, kBright);
-  centered(c, 190, usd(data["today"]["cost"]) + " est.", 2, kTeal);
+  centered(c, 190, usd(data["today"]["cost"]) + tr(zh, " est.", " 预估"), 2, kTeal);
   card(c, 217, 32);
-  c.text(91, 226, "MONTH", 2, kMuted);
+  text_at(c, 91, 226, tr(zh, "MONTH", "本月"), 2, kMuted);
   right(c, 376, 226, compact(data["month"]["tokens"]) + " / " + usd(data["month"]["cost"]), 2, kBright);
-  c.text(82, 264, models ? "TOP MODELS" : "TOP TOOLS", 2, kMuted);
+  text_at(c, 82, 264, models ? tr(zh, "TOP MODELS", "模型排行") : tr(zh, "TOP TOOLS", "工具排行"), 2, kMuted);
   const auto& rows = data[models ? "models" : "tools"].elements();
-  if (rows.empty()) centered(c, 298, "No breakdown", 2, kMuted);
+  if (rows.empty()) centered(c, 298, tr(zh, "No breakdown", "暂无明细"), 2, kMuted);
   for (size_t index = 0; index < std::min<size_t>(3, rows.size()); ++index) {
     const int y = 290 + static_cast<int>(index) * 24;
     name_at(c, 87, y, rows[index]["label"].as_string(), 18);
     right(c, 378, y, compact(rows[index]["tokens"]), 2, kTeal);
   }
-  centered(c, 368, models ? "Tap to see tools" : "Tap to see models", 2, kMuted);
+  centered(c, 365, models ? tr(zh, "Tap to see tools", "点按切换到工具")
+                          : tr(zh, "Tap to see models", "点按切换到模型"), 2, kMuted);
 }
 
-void quotas(Canvas& c, const Value& rows, size_t block, int64_t now) {
-  if (!rows.size()) centered(c, 213, "No quota data", 2, kMuted);
+void quotas(Canvas& c, const Value& rows, size_t block, int64_t now, bool zh) {
+  if (!rows.size()) centered(c, 213, tr(zh, "No quota data", "暂无额度数据"), 2, kMuted);
   const size_t start = block * kRows;
   for (size_t index = start; index < std::min(rows.size(), start + kRows); ++index) {
     const auto& row = rows[index];
@@ -104,24 +131,27 @@ void quotas(Canvas& c, const Value& rows, size_t block, int64_t now) {
     const double pct = row["pct"].as_number(-1);
     const uint16_t accent = stale || (pct >= 0 && pct < 25) ? kOrange : kTeal;
     card(c, y, 52);
-    name_at(c, 87, y + 7, row["label"].as_string(), 25);
+    name_at(c, 87, y + (zh ? 5 : 7), row["label"].as_string(), 25);
+    const int status_y = y + (zh ? 25 : 28);
     const std::string amount = pct >= 0 && pct <= 100
-        ? std::to_string(static_cast<int>(std::round(pct))) + "% left"
+        ? tr(zh, "", "剩余 ") + std::to_string(static_cast<int>(std::round(pct))) + tr(zh, "% left", "%")
         : "--";
-    right(c, 378, y + 28, amount, 2, accent);
-    name_at(c, 87, y + 28, stale ? "Stale" : reset ? "Reset " + age(reset - now) : "", 15, kMuted);
+    right(c, 378, status_y, amount, 2, accent);
+    name_at(c, 87, status_y, stale ? tr(zh, "Stale", "已过期")
+                                : reset ? tr(zh, "Reset ", "重置 ") + age(reset - now, zh) : "", 15, kMuted);
     c.fill_rect(87, y + 46, 291, 2, kTrack);
     if (pct >= 0 && pct <= 100) c.fill_rect(87, y + 46, static_cast<int>(291 * pct / 100), 2, accent);
   }
-  if (rows.size() > kRows) centered(c, 370, "Swipe up for more", 2, kMuted);
+  if (rows.size() > kRows) centered(c, 365, tr(zh, "Swipe up for more", "上滑查看更多"), 2, kMuted);
 }
 
-void trend(Canvas& c, const Value& rows, size_t detail) {
+void trend(Canvas& c, const Value& rows, size_t detail, bool zh) {
   const size_t count = detail % 2 ? 30 : 7;
   const std::string_view field = detail >= 2 ? "cost" : "tokens";
-  centered(c, 126, std::to_string(count) + " DAYS / " + (detail >= 2 ? "EST. COST" : "TOKENS"), 2, kMuted);
+  centered(c, 126, std::to_string(count) + tr(zh, " DAYS / ", " 天 / ") +
+           (detail >= 2 ? tr(zh, "EST. COST", "预估费用") : tr(zh, "TOKENS", "用量")), 2, kMuted);
   if (rows.size() == 0) {
-    centered(c, 217, "No history data", 2, kMuted);
+    centered(c, 217, tr(zh, "No history data", "暂无历史数据"), 2, kMuted);
     return;
   }
   const size_t start = rows.size() > count ? rows.size() - count : 0;
@@ -152,33 +182,64 @@ void trend(Canvas& c, const Value& rows, size_t detail) {
   }
   name_at(c, 86, 329, rows[start]["day"].as_string(), 5, kMuted);
   right(c, 380, 329, rows[rows.size() - 1]["day"].as_string(), 2, kMuted);
-  centered(c, 368, known < static_cast<int>(count) ? "Gaps = no reading" : "Tap for range / cost", 2, kMuted);
+  centered(c, 365, known < static_cast<int>(count) ? tr(zh, "Gaps = no reading", "短线表示缺少数据")
+             : tr(zh, "Tap for range / cost", "点按切换时段和费用"), 2, kMuted);
 }
 
-void devices(Canvas& c, const Value& rows, size_t block, int64_t now) {
-  if (!rows.size()) centered(c, 213, "No device data", 2, kMuted);
+void devices(Canvas& c, const Value& rows, size_t block, int64_t now, bool zh) {
+  if (!rows.size()) centered(c, 213, tr(zh, "No device data", "暂无设备数据"), 2, kMuted);
   const size_t start = block * kRows;
   for (size_t index = start; index < std::min(rows.size(), start + kRows); ++index) {
     const auto& row = rows[index];
     const int y = 125 + static_cast<int>(index - start) * 58;
     const int64_t seen = row["updated"].as_int();
     card(c, y, 52);
-    name_at(c, 88, y + 7, row["label"].as_string(), 18);
+    const auto label = row["label"].as_string();
+    const int title_y = y + (zh ? 6 : 7);
+    const int status_y = y + (zh ? 32 : 29);
+    name_at(c, 88, title_y, zh && label.substr(0, 7) == "Device " ? "设备 " + label.substr(7) : label, 18);
     right(c, 377, y + 7, compact(row["tokens"]), 2, kBright);
     const bool stale = row["stale"].as_bool();
-    c.fill_circle(92, y + 35, 4, stale ? kOrange : kTeal);
-    c.text(105, y + 29, stale ? "Stale" : "Reporting", 2, stale ? kOrange : kTeal);
-    right(c, 377, y + 29, !seen ? "--" : age(std::max<int64_t>(0, now - seen)) + " ago", 2, kMuted);
+    c.fill_circle(92, status_y + 6, 4, stale ? kOrange : kTeal);
+    text_at(c, 105, status_y, stale ? tr(zh, "Stale", "已过期") : tr(zh, "Reporting", "上报正常"), 2, stale ? kOrange : kTeal);
+    right(c, 377, status_y, !seen ? "--" : age(std::max<int64_t>(0, now - seen), zh) + tr(zh, " ago", "前"), 2, kMuted);
   }
-  if (rows.size() > kRows) centered(c, 370, "Swipe up for more", 2, kMuted);
+  if (rows.size() > kRows) centered(c, 365, tr(zh, "Swipe up for more", "上滑查看更多"), 2, kMuted);
+}
+
+void settings(Canvas& c, bool zh, uint32_t seconds, bool network) {
+  const auto row_y = [](int row) { return kSettingsTop + row * kSettingsStep; };
+  const std::string interval = seconds < 60 ? std::to_string(seconds) + tr(zh, " sec", " 秒")
+                                            : std::to_string(seconds / 60) + tr(zh, " min", " 分钟");
+  for (int row = 0; row < 3; ++row) card(c, row_y(row), kSettingsHeight);
+  text_at(c, 94, row_y(0) + 18, tr(zh, "Language", "语言"), 2, kBright);
+  right(c, 371, row_y(0) + 18, tr(zh, "English", "简体中文"), 2, kTeal);
+  text_at(c, 94, row_y(1) + 18, tr(zh, "Refresh interval", "拉取间隔"), 2, kBright);
+  right(c, 371, row_y(1) + 18, interval, 2, kTeal);
+  text_at(c, 94, row_y(2) + 18, tr(zh, "Refresh now", "立即刷新"), 2, kBright);
+  right(c, 371, row_y(2) + 18, ">", 2, kTeal);
+  centered(c, 362, tr(zh, "< Back", "< 返回"), 2, kBright);
+  centered(c, 406, network ? tr(zh, "Network online", "网络已连接")
+                            : tr(zh, "Offline", "网络未连接"), 2, network ? kMuted : kOrange);
 }
 
 }  // namespace
+
+bool valid_refresh_seconds(uint32_t seconds) {
+  return std::find(kIntervals.begin(), kIntervals.end(), seconds) != kIntervals.end();
+}
+
+uint32_t next_refresh_seconds(uint32_t seconds) {
+  const auto current = std::find(kIntervals.begin(), kIntervals.end(), seconds);
+  if (current == kIntervals.end() || current + 1 == kIntervals.end()) return kIntervals.front();
+  return *(current + 1);
+}
 
 void TokenMonitor::enable(bool enabled, bool combined) {
   enabled_ = enabled;
   combined_ = combined;
   hidden_ = false;
+  settings_open_ = false;
   dirty_ = true;
 }
 
@@ -224,15 +285,37 @@ void TokenMonitor::reset() {
   refresh();
 }
 
-const char* TokenMonitor::page_name() const { return kPages[page_]; }
+const char* TokenMonitor::page_name() const { return settings_open_ ? "Settings" : kPages[page_]; }
+
+void TokenMonitor::open_settings(bool open) {
+  settings_open_ = open;
+  dirty_ = true;
+}
+
+void TokenMonitor::set_language(Language language) {
+  language_ = language;
+  dirty_ = true;
+}
+
+void TokenMonitor::set_refresh_seconds(uint32_t seconds) {
+  if (seconds == refresh_seconds_) return;
+  refresh_seconds_ = seconds;
+  refresh();
+  dirty_ = true;
+}
 
 void TokenMonitor::next(int step) {
+  if (settings_open_) {
+    open_settings(false);
+    return;
+  }
   page_ = (page_ + step + 4) % 4;
   detail_ = 0;
   dirty_ = true;
 }
 
 void TokenMonitor::detail() {
+  if (settings_open_) return;
   size_t pages = page_ == 2 ? 4 : 2;
   if (page_ == 1 || page_ == 3) {
     const size_t count = data_[page_ == 1 ? "limits" : "devices"].size();
@@ -242,7 +325,7 @@ void TokenMonitor::detail() {
   dirty_ = true;
 }
 
-void TokenMonitor::touch(bool down, int x, int y, uint32_t now, bool& settings) {
+TouchAction TokenMonitor::touch(bool down, int x, int y, uint32_t now) {
   if (down) {
     if (!touching_) {
       first_x_ = x;
@@ -252,21 +335,43 @@ void TokenMonitor::touch(bool down, int x, int y, uint32_t now, bool& settings) 
     touching_ = true;
     last_x_ = x;
     last_y_ = y;
-    return;
+    return TouchAction::None;
   }
-  if (!touching_) return;
+  if (!touching_) return TouchAction::None;
   touching_ = false;
   const int dx = last_x_ - first_x_;
   const int dy = last_y_ - first_y_;
-  if (std::abs(dx) >= 42 && std::abs(dx) > std::abs(dy)) {
+  const bool tap = std::abs(dx) < 18 && std::abs(dy) < 18;
+  const bool header = first_y_ < 118 && first_x_ >= 96 && first_x_ <= 370;
+  const uint32_t held = now - touch_at_;
+  const bool short_tap = tap && held < 550;
+  if (tap && first_y_ < 118 && held >= 650) return TouchAction::HermesSettings;
+  if (settings_open_) {
+    if ((dx >= 42 && dx > std::abs(dy)) || (short_tap && (header || (first_y_ >= 331 && first_y_ < 398)))) {
+      open_settings(false);
+    } else if (short_tap && first_x_ >= 76 && first_x_ <= 390 && first_y_ >= kSettingsTop) {
+      const int offset = first_y_ - kSettingsTop;
+      if (offset % kSettingsStep < kSettingsHeight) {
+        switch (offset / kSettingsStep) {
+          case 0: return TouchAction::Language;
+          case 1: return TouchAction::Interval;
+          case 2:
+            refresh();
+            open_settings(false);
+            break;
+        }
+      }
+    }
+  } else if (std::abs(dx) >= 42 && std::abs(dx) > std::abs(dy)) {
     next(dx < 0 ? 1 : -1);
   } else if (dy < -38 && std::abs(dy) > std::abs(dx)) {
     detail();
-  } else if (std::abs(dx) < 18 && std::abs(dy) < 18) {
-    if (first_y_ < 118 && now - touch_at_ >= 650) settings = true;
+  } else if (tap) {
+    if (header && short_tap) open_settings(true);
     else if (first_y_ >= 391) refresh();
-    else if (now - touch_at_ < 550 && first_y_ >= 118) detail();
+    else if (held < 550 && first_y_ >= 118) detail();
   }
+  return TouchAction::None;
 }
 
 void TokenMonitor::draw(hg::Display& display, uint32_t now, bool network, bool force) {
@@ -281,28 +386,39 @@ void TokenMonitor::draw(hg::Display& display, uint32_t now, bool network, bool f
   c.fill_rect(0, 0, info.width, info.height, kBackground);
   c.ring(233, 233, 224, 2, kTrack);
   c.arc(233, 233, 224, 3, page_ % 2 ? -1 : 1, kTeal);
-  centered(c, 59, "TOKEN MONITOR", 2, kMuted);
-  centered(c, 82, page_name(), 3, kBright);
+  const bool zh = language_ == Language::Chinese;
+  centered(c, zh ? 47 : 57, tr(zh, "TOKEN MONITOR", "用量监控"), 2, kMuted);
+  centered(c, 82, settings_open_ ? tr(zh, "Settings", "设置") : (zh ? kPagesZh : kPages)[page_], 3, kBright);
+  if (settings_open_) {
+    settings(c, zh, refresh_seconds_, network);
+    display.flush(0, info.height);
+    return;
+  }
+  settings_icon(c);
 
   const bool present = data_.is_object();
   const int64_t elapsed = static_cast<uint32_t>(now - received_at_) / 1000;
   const int64_t server_now = data_["asOf"].as_int() + elapsed;
   if (present) {
     switch (page_) {
-      case 0: overview(c, data_, detail_ != 0); break;
-      case 1: quotas(c, data_["limits"], detail_, server_now); break;
-      case 2: trend(c, data_["trend"], detail_); break;
-      case 3: devices(c, data_["devices"], detail_, server_now); break;
+      case 0: overview(c, data_, detail_ != 0, zh); break;
+      case 1: quotas(c, data_["limits"], detail_, server_now, zh); break;
+      case 2: trend(c, data_["trend"], detail_, zh); break;
+      case 3: devices(c, data_["devices"], detail_, server_now, zh); break;
     }
   } else {
-    centered(c, 190, failed_ ? "Relay unavailable" : "Waiting for data", 2, kBright);
-    centered(c, 224, network ? "Set relay via USB" : "Connect Wi-Fi", 2, kMuted);
-    centered(c, 252, "Hold title for settings", 2, kMuted);
+    centered(c, 190, failed_ ? tr(zh, "Relay unavailable", "中继不可用")
+                             : tr(zh, "Waiting for data", "正在等待数据"), 2, kBright);
+    centered(c, 224, network ? tr(zh, "Set relay via USB", "通过 USB 配置中继")
+                              : tr(zh, "Connect Wi-Fi", "请连接 Wi-Fi"), 2, kMuted);
+    centered(c, 252, tr(zh, "Tap title for settings", "点按标题进入设置"), 2, kMuted);
   }
   for (int i = 0; i < 4; ++i) c.fill_circle(209 + 16 * i, 392, i == page_ ? 4 : 2, i == page_ ? kTeal : kMuted);
-  const bool stale = failed_ || (present && elapsed >= 180) || !network;
-  centered(c, 406, !present ? (network ? "Tap to refresh" : "Offline")
-                            : (stale ? "Cached " : "Updated ") + age(elapsed) + " ago",
+  const bool stale = failed_ || (present && elapsed >= 3 * refresh_seconds_) || !network;
+  centered(c, 406, !present ? (network ? tr(zh, "Tap to refresh", "点按刷新")
+                                       : tr(zh, "Offline", "离线"))
+                            : (stale ? tr(zh, "Cached ", "缓存 ") : tr(zh, "Updated ", "更新 ")) +
+                                  age(elapsed, zh) + tr(zh, " ago", "前"),
            2, stale ? kOrange : kMuted);
   display.flush(0, info.height);
 }
