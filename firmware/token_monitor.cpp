@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <iterator>
 #include <string>
+#include <vector>
 
 #include "hg/canvas.hpp"
 #include "hg/font.hpp"
@@ -26,9 +27,13 @@ constexpr size_t kDeviceRows = 4;
 constexpr const char* kPages[] = {"Overview", "Quotas", "Trend", "Devices"};
 constexpr const char* kPagesZh[] = {"总览", "剩余额度", "趋势", "设备"};
 constexpr std::array<uint32_t, 5> kIntervals{30, kDefaultRefreshSeconds, 120, 300, 900};
-constexpr int kSettingsTop = 132;
-constexpr int kSettingsStep = 66;
-constexpr int kSettingsHeight = 51;
+constexpr int kSettingsTop = 126;
+constexpr int kSettingsStep = 54;
+constexpr int kSettingsHeight = 45;
+constexpr int kPickerTop = 124;
+constexpr int kPickerStep = 39;
+constexpr int kPickerHeight = 33;
+constexpr size_t kProviderRows = 6;
 constexpr uint16_t kBackground = hg::rgb565(0, 0, 0);
 constexpr uint16_t kPanel = hg::rgb565(16, 21, 31);
 constexpr uint16_t kTrack = hg::rgb565(39, 47, 63);
@@ -264,14 +269,35 @@ bool quota_stale(const Value& row, int64_t now) {
   return row["stale"].as_bool() || (reset && reset <= now);
 }
 
-const Value* lowest_quota(const Value& data, bool cycle, int64_t now) {
+std::string_view quota_provider(const Value& row) {
+  const std::string_view label = row["label"].as_string();
+  const auto style = source_style(label);
+  return style.label ? std::string_view(style.label) : label.substr(0, label.find(" #"));
+}
+
+std::vector<std::string_view> ring_providers(const Value& data) {
+  std::vector<std::string_view> providers{std::string_view{}};
+  for (const bool cycle : {false, true}) {
+    const auto rows = quota_rows(data, cycle);
+    for (size_t index = 0; index < rows.count; ++index) {
+      const auto provider = quota_provider(*rows.rows[index]);
+      if (std::find(providers.begin(), providers.end(), provider) == providers.end())
+        providers.push_back(provider);
+    }
+  }
+  std::sort(providers.begin() + 1, providers.end());
+  return providers;
+}
+
+const Value* lowest_quota(const Value& data, std::string_view provider, bool cycle, int64_t now) {
   const Value* lowest = nullptr;
   double remaining = 101;
   const auto quotas = quota_rows(data, cycle);
   for (size_t index = 0; index < quotas.count; ++index) {
     const auto& row = *quotas.rows[index];
     const double percent = row["pct"].as_number(-1);
-    if (percent >= 0 && percent <= 100 && percent < remaining && !quota_stale(row, now)) {
+    if (percent >= 0 && percent <= 100 && percent < remaining &&
+        !quota_stale(row, now) && quota_provider(row) == provider) {
       lowest = &row;
       remaining = percent;
     }
@@ -279,15 +305,14 @@ const Value* lowest_quota(const Value& data, bool cycle, int64_t now) {
   return lowest;
 }
 
-void quota_ring(Canvas& c, const Value* quota, bool cycle, bool zh, bool settings_open) {
+void quota_ring(Canvas& c, std::string_view provider, const Value* quota, bool cycle, bool zh) {
   constexpr int radius = 222;
   constexpr int start = 120;
   constexpr int sweep = 300;
   constexpr float radians_per_degree = 0.0174532925f;
   const double remaining = quota ? (*quota)["pct"].as_number() : 0;
   const int filled = static_cast<int>(std::round(sweep * remaining / 100));
-  const std::string_view label = quota ? std::string_view((*quota)["label"].as_string()) : std::string_view{};
-  const auto style = source_style(label);
+  const auto style = source_style(provider);
   const auto paint = [&](int through, uint16_t color, int thickness) {
     for (int degree = 0; degree <= through; ++degree) {
       const float angle = (start + degree) * radians_per_degree;
@@ -298,17 +323,9 @@ void quota_ring(Canvas& c, const Value* quota, bool cycle, bool zh, bool setting
   };
   paint(sweep, kTrack, 3);
   if (filled > 0) paint(filled, style.color, 4);
-  if (settings_open) return;
-
   const auto* window = cycle ? tr(zh, "CYCLE", "周期") : tr(zh, "SHORT", "短时");
   const int summary_y = zh ? 53 : 57;
   std::string summary(window);
-  if (!quota) {
-    centered(c, summary_y, summary + " / --", 2, kMuted);
-    return;
-  }
-  std::string_view provider = style.label ? std::string_view(style.label) : label.substr(0, label.find(" #"));
-  if (provider.empty()) provider = "Quota";
   if (provider == "GitHub Copilot") provider = "Copilot";
   summary += ' ';
   constexpr size_t provider_columns = 11;
@@ -318,8 +335,8 @@ void quota_ring(Canvas& c, const Value* quota, bool cycle, bool zh, bool setting
   } else {
     summary += provider;
   }
-  summary += " " + std::to_string(static_cast<int>(std::round(remaining))) + "%";
-  centered(c, summary_y, summary, 2, remaining <= 10 ? kWarning : style.color);
+  summary += quota ? " " + std::to_string(static_cast<int>(std::round(remaining))) + "%" : " --";
+  centered(c, summary_y, summary, 2, !quota ? kMuted : remaining <= 10 ? kWarning : style.color);
 }
 
 std::string quota_caption(const Value& row, bool zh) {
@@ -464,20 +481,45 @@ void devices(Canvas& c, const Value& rows, size_t block, int64_t now, bool zh) {
   if (rows.size() > kDeviceRows) centered(c, 365, tr(zh, "Swipe up for more", "上滑查看更多"), 2, kMuted);
 }
 
-void settings(Canvas& c, bool zh, uint32_t seconds, bool network) {
+void settings(Canvas& c, bool zh, uint32_t seconds, bool network, std::string_view provider) {
   const auto row_y = [](int row) { return kSettingsTop + row * kSettingsStep; };
   const std::string interval = seconds < 60 ? std::to_string(seconds) + tr(zh, " sec", " 秒")
                                             : std::to_string(seconds / 60) + tr(zh, " min", " 分钟");
-  for (int row = 0; row < 3; ++row) card(c, row_y(row), kSettingsHeight);
-  text_at(c, 94, row_y(0) + 18, tr(zh, "Language", "语言"), 2, kBright);
-  right(c, 371, row_y(0) + 18, tr(zh, "English", "简体中文"), 2, kAccent);
-  text_at(c, 94, row_y(1) + 18, tr(zh, "Refresh interval", "拉取间隔"), 2, kBright);
-  right(c, 371, row_y(1) + 18, interval, 2, kAccent);
-  text_at(c, 94, row_y(2) + 18, tr(zh, "Refresh now", "立即刷新"), 2, kBright);
-  right(c, 371, row_y(2) + 18, ">", 2, kAccent);
-  centered(c, 362, tr(zh, "< Back", "< 返回"), 2, kBright);
+  for (int row = 0; row < 4; ++row) card(c, row_y(row), kSettingsHeight);
+  text_at(c, 94, row_y(0) + 14, tr(zh, "Language", "语言"), 2, kBright);
+  right(c, 371, row_y(0) + 14, tr(zh, "English", "简体中文"), 2, kAccent);
+  text_at(c, 94, row_y(1) + 14, tr(zh, "Refresh interval", "拉取间隔"), 2, kBright);
+  right(c, 371, row_y(1) + 14, interval, 2, kAccent);
+  text_at(c, 94, row_y(2) + 14, tr(zh, "Refresh now", "立即刷新"), 2, kBright);
+  right(c, 371, row_y(2) + 14, ">", 2, kAccent);
+  text_at(c, 94, row_y(3) + 14, tr(zh, "Outer ring", "外圈"), 2, kBright);
+  if (provider.empty()) right(c, 347, row_y(3) + 14, tr(zh, "Off", "关闭"), 2, kMuted);
+  else name_at(c, 217, row_y(3) + 14, provider == "GitHub Copilot" ? "Copilot" : provider,
+               11, source_style(provider).color);
+  right(c, 371, row_y(3) + 14, ">", 2, kAccent);
+  centered(c, 367, tr(zh, "< Back", "< 返回"), 2, kBright);
   centered(c, 406, network ? tr(zh, "Network online", "网络已连接")
                             : tr(zh, "Offline", "网络未连接"), 2, network ? kMuted : kWarning);
+}
+
+void ring_picker(Canvas& c, const std::vector<std::string_view>& options, size_t page,
+                 std::string_view selected, bool zh) {
+  const size_t start = page * kProviderRows;
+  for (size_t i = start; i < std::min(start + kProviderRows, options.size()); ++i) {
+    const int y = kPickerTop + static_cast<int>(i - start) * kPickerStep;
+    const auto provider = options[i];
+    card(c, y, kPickerHeight);
+    if (!provider.empty()) c.fill_circle(98, y + 16, 4, source_style(provider).color);
+    name_at(c, 113, y + 10, provider.empty() ? tr(zh, "Off", "关闭") : provider, 18);
+    if (provider == selected) right(c, 372, y + 10, tr(zh, "Set", "已选"), 2, kHealthy);
+  }
+  if (options.size() == 1) centered(c, 225, tr(zh, "No quota data", "暂无额度"), 2, kMuted);
+  const size_t pages = (options.size() + kProviderRows - 1) / kProviderRows;
+  if (pages > 1) {
+    const auto label = std::to_string(page + 1) + "/" + std::to_string(pages);
+    centered(c, 367, label + tr(zh, "  Swipe up", "  上滑翻页"), 2, kMuted);
+  }
+  centered(c, 407, tr(zh, "< Back", "< 返回"), 2, kBright);
 }
 
 }  // namespace
@@ -496,7 +538,7 @@ void TokenMonitor::enable(bool enabled, bool combined) {
   enabled_ = enabled;
   combined_ = combined;
   hidden_ = false;
-  settings_open_ = false;
+  settings_page_ = SettingsPage::Closed;
   dirty_ = true;
 }
 
@@ -545,12 +587,16 @@ void TokenMonitor::reset() {
   refresh();
 }
 
-const char* TokenMonitor::page_name() const { return settings_open_ ? "Settings" : kPages[page_]; }
+const char* TokenMonitor::page_name() const {
+  if (settings_page_ == SettingsPage::Ring) return "Ring";
+  return settings_page_ == SettingsPage::General ? "Settings" : kPages[page_];
+}
 
 size_t TokenMonitor::quota_count() const { return quota_rows(data_, cycle_quotas_).count; }
 
 void TokenMonitor::open_settings(bool open) {
-  settings_open_ = open;
+  settings_page_ = open ? SettingsPage::General : SettingsPage::Closed;
+  provider_page_ = 0;
   dirty_ = true;
 }
 
@@ -566,8 +612,13 @@ void TokenMonitor::set_refresh_seconds(uint32_t seconds) {
   dirty_ = true;
 }
 
+void TokenMonitor::set_ring_provider(std::string_view provider) {
+  ring_provider_ = provider;
+  dirty_ = true;
+}
+
 void TokenMonitor::next(int step) {
-  if (settings_open_) {
+  if (settings_page_ != SettingsPage::Closed) {
     open_settings(false);
     return;
   }
@@ -577,7 +628,7 @@ void TokenMonitor::next(int step) {
 }
 
 void TokenMonitor::detail() {
-  if (settings_open_) return;
+  if (settings_page_ != SettingsPage::Closed) return;
   size_t pages = page_ == 2 ? 4 : 2;
   if (page_ == 1 || page_ == 3) {
     const size_t count = page_ == 1 ? quota_count() : data_["devices"].size();
@@ -588,7 +639,7 @@ void TokenMonitor::detail() {
   dirty_ = true;
 }
 
-TouchAction TokenMonitor::touch(bool down, int x, int y, uint32_t now) {
+TouchAction TokenMonitor::touch(bool down, int x, int y, uint32_t now, std::string_view& provider) {
   if (down) {
     if (!touching_) {
       first_x_ = x;
@@ -609,10 +660,33 @@ TouchAction TokenMonitor::touch(bool down, int x, int y, uint32_t now) {
   const uint32_t held = now - touch_at_;
   const bool short_tap = tap && held < 550;
   if (tap && first_y_ < 118 && held >= 650) return TouchAction::HermesSettings;
-  if (settings_open_) {
-    if ((dx >= 42 && dx > std::abs(dy)) || (short_tap && (header || (first_y_ >= 331 && first_y_ < 398)))) {
+  const bool swipe_back = dx >= 42 && dx > std::abs(dy);
+  const bool in_columns = first_x_ >= 76 && first_x_ <= 390;
+  if (settings_page_ == SettingsPage::Ring) {
+    if (swipe_back || (short_tap && (header || first_y_ >= 395))) {
+      open_settings(true);
+    } else {
+      const auto options = ring_providers(data_);
+      const size_t pages = (options.size() + kProviderRows - 1) / kProviderRows;
+      provider_page_ = std::min(provider_page_, pages - 1);
+      const int offset = first_y_ - kPickerTop;
+      if ((std::abs(dy) > 38 && std::abs(dy) > std::abs(dx)) ||
+          (short_tap && first_y_ >= 350 && first_y_ < 395)) {
+        provider_page_ = (provider_page_ + (dy > 38 ? pages - 1 : 1)) % pages;
+        dirty_ = true;
+      } else if (short_tap && in_columns && offset >= 0 && offset / kPickerStep < static_cast<int>(kProviderRows) &&
+                 offset % kPickerStep < kPickerHeight) {
+        const size_t row = provider_page_ * kProviderRows + static_cast<size_t>(offset / kPickerStep);
+        if (row < options.size()) {
+          provider = options[row];
+          return TouchAction::RingProvider;
+        }
+      }
+    }
+  } else if (settings_page_ == SettingsPage::General) {
+    if (swipe_back || (short_tap && (header || (first_y_ >= 351 && first_y_ < 399)))) {
       open_settings(false);
-    } else if (short_tap && first_x_ >= 76 && first_x_ <= 390 && first_y_ >= kSettingsTop) {
+    } else if (short_tap && in_columns && first_y_ >= kSettingsTop) {
       const int offset = first_y_ - kSettingsTop;
       if (offset % kSettingsStep < kSettingsHeight) {
         switch (offset / kSettingsStep) {
@@ -621,6 +695,11 @@ TouchAction TokenMonitor::touch(bool down, int x, int y, uint32_t now) {
           case 2:
             refresh();
             open_settings(false);
+            break;
+          case 3:
+            provider_page_ = 0;
+            settings_page_ = SettingsPage::Ring;
+            dirty_ = true;
             break;
         }
       }
@@ -658,15 +737,25 @@ void TokenMonitor::draw(hg::Display& display, uint32_t now, bool network, bool f
   const int64_t elapsed = static_cast<uint32_t>(now - received_at_) / 1000;
   const int64_t server_now = data_["asOf"].as_int() + elapsed;
   const bool stale = failed_ || (present && elapsed >= 3 * refresh_seconds_) || !network;
-  const auto* quota = present && !stale && !settings_open_ ? lowest_quota(data_, cycle_quotas_, server_now) : nullptr;
-  quota_ring(c, quota, cycle_quotas_, zh, settings_open_);
   const char* title = zh ? kPagesZh[page_] : page_ == 1 ? "Quota left" : kPages[page_];
-  centered(c, 82, settings_open_ ? tr(zh, "Settings", "设置") : title, 3, kBright);
-  if (settings_open_) {
-    settings(c, zh, refresh_seconds_, network);
+  if (settings_page_ != SettingsPage::Closed) {
+    if (settings_page_ == SettingsPage::Ring) {
+      centered(c, 82, tr(zh, "Outer ring", "外圈"), 3, kBright);
+      const auto providers = ring_providers(data_);
+      provider_page_ = std::min(provider_page_, (providers.size() - 1) / kProviderRows);
+      ring_picker(c, providers, provider_page_, ring_provider_, zh);
+    } else {
+      centered(c, 82, tr(zh, "Settings", "设置"), 3, kBright);
+      settings(c, zh, refresh_seconds_, network, ring_provider_);
+    }
     display.flush(0, info.height);
     return;
   }
+  if (!ring_provider_.empty()) {
+    const auto* quota = present && !stale ? lowest_quota(data_, ring_provider_, cycle_quotas_, server_now) : nullptr;
+    quota_ring(c, ring_provider_, quota, cycle_quotas_, zh);
+  }
+  centered(c, 82, title, 3, kBright);
   settings_icon(c);
 
   if (present) {

@@ -70,6 +70,8 @@ void App::token_monitor_load() {
                                                         : stopwatch::Language::English);
   if (const auto seconds = refresh_seconds(setting("tm_interval")))
     token_monitor_.set_refresh_seconds(seconds);
+  const auto provider = setting("tm_ring_src");
+  if (provider.size() <= 26) token_monitor_.set_ring_provider(provider);
   const bool lab = endpoint.substr(0, 7) == "http://";
   if (endpoint_valid(endpoint, lab)) tm_endpoint_ = std::move(endpoint);
   if (!lab && clean_token(token)) tm_token_ = std::move(token);
@@ -115,7 +117,8 @@ bool App::token_monitor_touch(bool down, int x, int y, uint32_t when, bool allow
   }
   activity_at_ = now();
   clock_showing_ = false;
-  switch (token_monitor_.touch(down, x, y, when)) {
+  std::string_view provider;
+  switch (token_monitor_.touch(down, x, y, when, provider)) {
     case stopwatch::TouchAction::HermesSettings:
       open_settings();
       break;
@@ -125,6 +128,13 @@ bool App::token_monitor_touch(bool down, int x, int y, uint32_t when, bool allow
       break;
     case stopwatch::TouchAction::Interval:
       token_monitor_set_interval(stopwatch::next_refresh_seconds(token_monitor_.refresh_seconds()));
+      break;
+    case stopwatch::TouchAction::RingProvider:
+      if (provider == token_monitor_.ring_provider() ||
+          (hal_.storage && hal_.storage->set("tm_ring_src", provider))) {
+        token_monitor_.set_ring_provider(provider);
+        token_monitor_.open_settings(true);
+      }
       break;
     case stopwatch::TouchAction::None:
       break;
@@ -161,6 +171,7 @@ std::string App::token_monitor_command(std::string_view args) {
         .set("language", token_monitor_.language() == stopwatch::Language::Chinese ? "zh" : "en")
         .set("quota_view", token_monitor_.cycle_quotas() ? "cycle" : "short")
         .set("quota_count", static_cast<int>(token_monitor_.quota_count()))
+        .set("ring_provider", token_monitor_.ring_provider())
         .set("interval_seconds", token_monitor_.refresh_seconds())
         .set("status", tm_http_status_)
         .set("refresh_requested", token_monitor_.refresh_id());

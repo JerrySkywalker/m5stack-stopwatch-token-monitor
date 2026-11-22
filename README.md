@@ -12,9 +12,12 @@ same dashboard and data format. This is a community project.
 | Trend | 7 or 30 days of tokens or estimated cost. Gaps indicate missing data |
 | Devices | Per-device totals and freshness without exposing hostnames by default |
 
-The outer ring shows the lowest fresh remaining quota in the selected
-**Short-term** or **Cycle** view. Its fill uses the provider's color. The
-header names the provider and shows its percentage on every dashboard page.
+The outer ring starts off. In **Settings → Outer ring**, choose a provider
+from the current quota snapshot or turn it off. The watch remembers the
+selection. When bound, the ring uses that provider's color and shows its
+lowest fresh remaining percentage within **Short-term** or **Cycle**.
+If the selected provider has no fresh quota for that view, the ring stays
+gray and the header shows `--`.
 
 Swipe horizontally to change views. Tap the body or swipe up to cycle the
 current view's details. Tap the footer to refresh. Hold the title and
@@ -35,6 +38,9 @@ and relay provisioning on the next boot.
 点按标题或齿轮进入设置。点按「语言」切换简体中文与英文。点按「拉取间隔」
 可在 30 秒、1 分钟（默认）、2 分钟、5 分钟和 15 分钟之间切换，重启后仍保留。
 「立即刷新」会请求新的快照，并返回原来的页面。
+
+在「设置 → 外圈」选择要绑定的服务商，也可以关闭外圈。外圈跟随「短时／周期」
+切换，显示所选服务商的最低剩余额度。选择会在重启后保留。
 
 ## Simulator and local verification
 

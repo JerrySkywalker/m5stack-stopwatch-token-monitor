@@ -143,7 +143,7 @@ def prepare(output, profile):
              '  if (cmd == "tm") return token_monitor_command(rest);\n  if (cmd == "status") return "@status " + status_json();'),
             ('    if (cmd == "factory-reset") {\n      for (const char* k : kSettingKeys)',
              '''    if (cmd == "factory-reset") {
-      for (const char* key : {"tm_lang", "tm_interval", "tm_endpoint", "tm_token"})
+      for (const char* key : {"tm_lang", "tm_interval", "tm_endpoint", "tm_token", "tm_ring_src"})
         hal_.storage->erase(key);
       for (const char* k : kSettingKeys)'''),
             ('@help commands: status |', '@help commands: status | tm |'),

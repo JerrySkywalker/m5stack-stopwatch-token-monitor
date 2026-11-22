@@ -161,6 +161,21 @@ def quota_split(sim, output):
         ("session", 100), ("week", 70), ("month", 85), ("unknown", 99), ("session", 25), ("session", 1),
     ]
     assert sim.console("tm inject " + json.dumps(payload, separators=(",", ":"))) == "@ok snapshot"
+    assert sim_status(sim)["ring_provider"] == ""
+
+    def select_provider(y, label):
+        tap_at(sim, 350, 91)
+        assert sim_status(sim)["page"] == "Settings"
+        tap_at(sim, 290, 310)
+        assert sim_status(sim)["page"] == "Ring"
+        tap_at(sim, 210, y)
+        assert sim_status(sim)["page"] == "Settings"
+        assert sim_status(sim)["ring_provider"] == label
+        tap_at(sim, 245, 367)
+        assert sim_status(sim)["page"] == "Quotas"
+
+    select_provider(179, "Cursor")
+    sim.screenshot(output / "11-ring-short.png")
     tap_at(sim, 156, 132)
     state = sim_status(sim)
     assert state["quota_view"] == "short" and state["quota_count"] == 3
@@ -168,13 +183,17 @@ def quota_split(sim, output):
     offset = 11 * 3
     short_color = sim.rgb888(233, 234)[offset:offset + 3]
     assert short_color[2] > short_color[0] > short_color[1] > 100  # Cursor purple
-    sim.screenshot(output / "11-ring-short.png")
     tap_at(sim, 300, 132)
     state = sim_status(sim)
     assert state["quota_view"] == "cycle" and state["quota_count"] == 2
+    assert state["ring_provider"] == "Cursor" and max(sim.rgb888(233, 234)[offset:offset + 3]) < 100
+    select_provider(257, "OpenCode")
     cycle_color = sim.rgb888(233, 234)[offset:offset + 3]
     assert cycle_color[0] > cycle_color[2] > cycle_color[1] > 100  # OpenCode pink
     sim.screenshot(output / "12-ring-cycle.png")
+    select_provider(140, "")
+    assert sim.rgb888(233, 234)[offset:offset + 3] == b"\0\0\0"
+    select_provider(257, "OpenCode")
     assert sim.console("tm inject-error") == "@ok simulated relay failure"
     assert max(sim.rgb888(233, 234)[offset:offset + 3]) < 100  # Cached data leaves an empty track.
     for item in payload["limits"]:
@@ -209,7 +228,7 @@ def settings_ui(sim, output):
     sim.screenshot(output / "10-quotas-zh.png")
     tap_at(sim, 350, 91)
     before = sim_status(sim)["refresh_requested"]
-    tap_at(sim, 305, 280)
+    tap_at(sim, 305, 255)
     assert sim_status(sim)["page"] == "Quotas" and sim_status(sim)["refresh_requested"] == before + 1
 
 
@@ -273,6 +292,7 @@ def standalone(body, recovered, output):
             state = sim_status(restarted)
             assert state["language"] == "zh" and state["interval_seconds"] == 120
             assert state["relay_configured"] and state["authenticated"]
+            assert state["ring_provider"] == "OpenCode"
             assert restarted.console("tm language en") == "@ok Token Monitor"
             assert restarted.console("tm interval 60") == "@ok Token Monitor"
             state = sim_status(restarted)
@@ -288,6 +308,7 @@ def standalone(body, recovered, output):
             assert reset.console("tm mode watch") == "@ok simulator mode"
             state = sim_status(reset)
             assert state["language"] == "en" and state["interval_seconds"] == 60
+            assert state["ring_provider"] == ""
             assert not state["relay_configured"] and not state["authenticated"]
         finally:
             reset.close()
