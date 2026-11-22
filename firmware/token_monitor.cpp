@@ -601,6 +601,7 @@ void TokenMonitor::open_settings(bool open) {
 }
 
 void TokenMonitor::set_language(Language language) {
+  if (language == language_) return;
   language_ = language;
   dirty_ = true;
 }

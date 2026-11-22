@@ -64,10 +64,14 @@ void App::token_monitor_enable(bool enabled, bool combined) {
 
 void App::token_monitor_load() {
   if (!token_monitor_.enabled()) return;
+  // Preserve the dashboard's previous explicit choice when upgrading.
+  const auto legacy_language = setting("tm_lang");
+  if (hal_.storage && (legacy_language == "zh" || legacy_language == "en") &&
+      hal_.storage->set("language", legacy_language)) {
+    hal_.storage->erase("tm_lang");
+  }
   auto endpoint = setting("tm_endpoint");
   auto token = setting("tm_token");
-  token_monitor_.set_language(setting("tm_lang") == "zh" ? stopwatch::Language::Chinese
-                                                        : stopwatch::Language::English);
   if (const auto seconds = refresh_seconds(setting("tm_interval")))
     token_monitor_.set_refresh_seconds(seconds);
   const auto provider = setting("tm_ring_src");
@@ -77,12 +81,14 @@ void App::token_monitor_load() {
   if (!lab && clean_token(token)) tm_token_ = std::move(token);
 }
 
+void App::token_monitor_sync_language() {
+  token_monitor_.set_language(lang_ == i18n::Lang::Zh ? stopwatch::Language::Chinese
+                                                     : stopwatch::Language::English);
+}
+
 bool App::token_monitor_set_language(stopwatch::Language language) {
-  if (language == token_monitor_.language()) return true;
-  if (!hal_.storage || !hal_.storage->set("tm_lang", language == stopwatch::Language::Chinese ? "zh" : "en"))
-    return false;
-  token_monitor_.set_language(language);
-  return true;
+  const char* code = language == stopwatch::Language::Chinese ? "zh" : "en";
+  return console(std::string("set language ") + code) == "@ok language";
 }
 
 bool App::token_monitor_set_interval(uint32_t seconds) {
@@ -156,6 +162,7 @@ std::string App::token_monitor_command(std::string_view args) {
   if (args == "mode combined" || args == "mode watch" || args == "mode off") {
     token_monitor_enable(args != "mode off", args != "mode watch");
     token_monitor_load();
+    load_settings();
     update_model();
     return "@ok simulator mode";
   }

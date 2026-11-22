@@ -27,15 +27,20 @@ retains its Hermes push-to-talk behavior.
 
 ## Dashboard settings / 看板设置
 
-Tap the title or gear to open the dashboard settings. Tap **Language**
-to switch between English and Simplified Chinese. Tap **Refresh interval**
+Tap the title or gear to open the dashboard settings. **Language** switches
+both the dashboard and the Hermes Gadget menus between English and Simplified
+Chinese. The Language row in Hermes settings applies the same preference.
+An upgrade carries over the watch's previous dashboard language. Both the
+StopWatch firmware and the round simulator include the CJK font for Chinese
+replies. Tap **Refresh interval**
 to cycle through 30 seconds, 1 minute (default), 2 minutes, 5 minutes and
 15 minutes. The watch remembers both settings after reboot. **Refresh now**
 requests a fresh snapshot and returns to the current dashboard view.
 The USB console's `factory-reset` also clears the saved dashboard settings
 and relay provisioning on the next boot.
 
-点按标题或齿轮进入设置。点按「语言」切换简体中文与英文。点按「拉取间隔」
+点按标题或齿轮进入设置。「语言」同时切换看板和 Hermes 的简体中文与英文，
+也可以在 Hermes 设置里切换。升级会沿用原来的看板语言。点按「拉取间隔」
 可在 30 秒、1 分钟（默认）、2 分钟、5 分钟和 15 分钟之间切换，重启后仍保留。
 「立即刷新」会请求新的快照，并返回原来的页面。
 
@@ -80,6 +85,10 @@ notices and a SHA-256 receipt. The `--profile personal` switch builds the same
 dashboard plus the upstream Hermes transport and audio behavior. On Windows,
 WSL can run the firmware build in a Linux-native directory and write the
 completed artifacts to a Windows path via `/mnt/c`.
+
+The CJK builds use two 2304 KiB application slots. An upgrade from the
+old partition table needs a USB partition-table update in addition to the app.
+The address of the NVS settings partition stays at `0x9000`.
 
 Back up the full original flash using the
 [StopWatch upstream instructions](https://github.com/Adolanium/hermes-gadget-sdk/blob/v0.6.0/docs/hardware.md#m5stack-stopwatch)

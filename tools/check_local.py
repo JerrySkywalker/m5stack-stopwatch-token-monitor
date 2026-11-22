@@ -120,6 +120,12 @@ def sim_status(sim):
     return json.loads(line[4:])
 
 
+def gadget_language(sim):
+    reply = sim.console("get language")
+    assert reply.startswith("@value "), reply
+    return json.loads(reply[7:])["value"]
+
+
 def swipe_left(sim):
     sim.touch(True, 373, 230)
     sim.run_for(0.08)
@@ -213,6 +219,7 @@ def settings_ui(sim, output):
     english = sim.screenshot(output / "8-settings-en.png").read_bytes()
     tap_at(sim, 305, 150)
     assert sim_status(sim)["language"] == "zh"
+    assert gadget_language(sim) == "zh"
     chinese = sim.screenshot(output / "9-settings-zh.png").read_bytes()
     assert chinese != english
     for interval in (120, 300, 900, 30, 60, 120):
@@ -313,8 +320,21 @@ def standalone(body, recovered, output):
         finally:
             reset.close()
 
+        # Upgrade the old split settings, then persist changes through the shared setting.
+        (state_dir / "nvs.json").write_text(json.dumps({"tm_lang": "zh", "language": "en"}), encoding="utf-8")
+        upgraded = Simulator(board="sim-466x466-round", state_dir=state_dir)
+        try:
+            upgraded.start()
+            assert upgraded.console("tm mode watch") == "@ok simulator mode"
+            assert sim_status(upgraded)["language"] == gadget_language(upgraded) == "zh"
+            assert "tm_lang" not in upgraded.storage.data
+            assert upgraded.console("set language en") == "@ok language"
+            assert sim_status(upgraded)["language"] == "en"
+        finally:
+            upgraded.close()
 
-def combined(url, body, output):
+
+def combined(url, body, output, publish_reply):
     from hermes_gadget.sim import Simulator
 
     sim = Simulator(url=url, board="sim-466x466-round", state_dir=output / "personal-nvs")
@@ -334,14 +354,55 @@ def combined(url, body, output):
         assert sim.wait_screen("ready", timeout=20)
         assert sim_status(sim)["page"] == "Quotas" and sim_status(sim)["visible"]
         sim.screenshot(output / "7-personal-return.png")
+        assert sim.console("set language en") == "@ok language"
+        assert sim_status(sim)["language"] == "en"
+        tap_at(sim, 350, 91)
+        tap_at(sim, 305, 150)
+        assert sim_status(sim)["language"] == gadget_language(sim) == "zh"
+        sim.screenshot(output / "13-shared-language-zh.png")
+        assert sim.console("tm back") == "@ok Token Monitor"
+        assert sim.console("settings") == "@ok settings"
+        assert sim.wait_screen("settings", timeout=4)
+        sim.screenshot(output / "14-hermes-settings-zh.png")
+        # In the round simulator, Language is five offered rows before Volume.
+        for _ in range(5):
+            sim.tap("up")
+            sim.run_for(0.08)
+        sim.run_for(0.30)
+        sim.screenshot(output / "15-hermes-language-zh.png")
+        sim.tap("talk")
+        assert sim_status(sim)["language"] == gadget_language(sim) == "en"
+        sim.tap("talk")
+        assert sim_status(sim)["language"] == gadget_language(sim) == "zh"
+        assert sim.console("settings close") == "@ok settings closed"
+        chinese = (
+            "腕表已连上本地网关。\n"
+            "这是一条中文回复。用量监控会保留你选择的额度页，向上滑动可以查看后续内容。\n"
+            "圆屏会自动换行，数字和中文标点也可以一起显示。今天的示例额度是 70%。\n"
+            "这是继续下滑后看到的内容。屏幕上会保留前后句的顺序，方便在腕表上读完一段回复。"
+        )
+        publish_reply(chinese)
+        assert sim.wait_for(lambda: (sim.last_received("reply") or {}).get("text") == chinese, timeout=6)
+        assert sim.wait_screen("responding", timeout=4)
+        assert not sim_status(sim)["visible"]
+        first_frame = sim.screenshot(output / "16-hermes-reply-zh.png").read_bytes()
+        sim.touch(True, 235, 341)
+        sim.run_for(0.08)
+        sim.touch(True, 235, 142)
+        sim.run_for(0.08)
+        sim.touch(False)
+        sim.run_for(0.08)
+        assert sim.screenshot(output / "17-hermes-reply-scroll-zh.png").read_bytes() != first_frame
     finally:
         sim.close()
 
 
 async def gateway(body, output):
     from hermes_gadget.devserver import serve as devserver
+    from hermes_gadget_plugin import textfmt
 
-    ready = asyncio.get_running_loop().create_future()
+    loop = asyncio.get_running_loop()
+    ready = loop.create_future()
     task = asyncio.create_task(devserver(
         "127.0.0.1", 0, "/gadget", output / "gateway",
         require_pairing=False, loopback=True, token=None,
@@ -349,7 +410,20 @@ async def gateway(body, output):
     ))
     try:
         hub = await asyncio.wait_for(ready, 6)
-        await asyncio.to_thread(combined, f"ws://127.0.0.1:{hub.bound_port}/gadget", body, output)
+
+        async def send(text):
+            session, = hub.sessions.values()
+            assert session.charset == "cjk"
+            shaped = textfmt.for_device(text, session.charset)
+            assert shaped == text
+            turn = "local-chinese-preview"
+            await session.turn_start(turn)
+            await session.send_reply(shaped, turn=turn)
+
+        def publish_reply(text):
+            asyncio.run_coroutine_threadsafe(send(text), loop).result(timeout=6)
+
+        await asyncio.to_thread(combined, f"ws://127.0.0.1:{hub.bound_port}/gadget", body, output, publish_reply)
     finally:
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
@@ -374,7 +448,7 @@ def main():
         standalone(body, recovered, output)
         print("PASS: standalone round screen, gestures, controls and cached data", flush=True)
         asyncio.run(gateway(body, output))
-        print("PASS: personal round screen, local Hermes voice state and return to the same page", flush=True)
+        print("PASS: personal round screen, shared locale, CJK reply and return to the same page", flush=True)
         print(f"Screenshots: {output}")
 
 

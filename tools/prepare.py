@@ -79,6 +79,38 @@ def prepare(output, profile):
     patches = {
         "firmware/core/CMakeLists.txt": [
             ("    src/app.cpp\n", "    src/app.cpp\n    src/token_monitor.cpp\n    src/token_monitor_app.cpp\n"),
+            ("    src/i18n_es.cpp\n", "    src/i18n_es.cpp\n    src/i18n_zh.cpp\n"),
+        ],
+        "firmware/CMakeLists.txt": [
+            ("add_subdirectory(core)\n", "add_subdirectory(core)\nhg_core_library(hg_core_cjk ON)\n"),
+            ("target_link_libraries(hgsim PRIVATE hg_core)", "target_link_libraries(hgsim PRIVATE hg_core_cjk)"),
+            ("  hg_core_library(hg_core_cjk ON)\n", ""),
+            ("add_executable(hg_cjk_tests tests/main.cpp tests/test_cjk.cpp)",
+             "add_executable(hg_cjk_tests tests/main.cpp tests/test_cjk.cpp tests/test_i18n.cpp)"),
+        ],
+        "firmware/tests/test_i18n.cpp": [
+            ("constexpr Panel kPanels[] = {\n",
+             "constexpr Panel kPanels[] = {\n#if HG_CJK_FONT\n"
+             "    {466, 466, true},  // This firmware enables the taller CJK lines on the StopWatch.\n"
+             "#else\n"),
+            ("// ESP32-S3-Touch-LCD-1.47 landscape (lcd.font_scale = 2 in board.cpp)\n};",
+             "// ESP32-S3-Touch-LCD-1.47 landscape (lcd.font_scale = 2 in board.cpp)\n#endif\n};"),
+        ],
+        "firmware/core/include/hg/i18n.hpp": [
+            ("{ En, Es, Count }", "{ En, Es, Zh, Count }"),
+            ("constexpr size_t kLangCount = static_cast<size_t>(Lang::Count);",
+             """#if HG_CJK_FONT
+constexpr size_t kLangCount = static_cast<size_t>(Lang::Count);
+#else
+constexpr size_t kLangCount = static_cast<size_t>(Lang::Zh);
+#endif"""),
+        ],
+        "firmware/core/src/i18n.cpp": [
+            ("extern const size_t kSpanishCount;", "extern const size_t kSpanishCount;\nextern const Entry kChinese[];\nextern const size_t kChineseCount;"),
+            ('    {"es", "Español"},', '    {"es", "Español"},\n#if HG_CJK_FONT\n    {"zh", "简体中文"},\n#endif'),
+            ("    case Lang::Es: return {kSpanish, kSpanishCount};",
+             "    case Lang::Es: return {kSpanish, kSpanishCount};\n#if HG_CJK_FONT\n"
+             "    case Lang::Zh: return {kChinese, kChineseCount};\n#endif"),
         ],
         "firmware/core/include/hg/app.hpp": [
             ('#include "hg/ui.hpp"', '#include "hg/ui.hpp"\n#include "hg/token_monitor.hpp"'),
@@ -101,13 +133,19 @@ def prepare(output, profile):
   bool tm_touch_wake_ = false;
   int tm_http_status_ = 0;
   void token_monitor_load();
+  void token_monitor_sync_language();
   bool token_monitor_set_language(stopwatch::Language language);
   bool token_monitor_set_interval(uint32_t seconds);
   bool token_monitor_screen(Screen screen) const;
   std::string token_monitor_command(std::string_view args);"""),
         ],
         "firmware/core/src/app.cpp": [
-            ("  agent_profile_ = setting(\"profile\",", "  token_monitor_load();\n  agent_profile_ = setting(\"profile\","),
+            ("  load_settings();\n  agent_profile_ =", "  token_monitor_load();\n  load_settings();\n  agent_profile_ ="),
+            ("  lang_ = lang_auto_ ? hermes_lang_.value_or(i18n::Lang::En) : i18n::parse(language).value_or(i18n::Lang::En);",
+             "  lang_ = lang_auto_ ? hermes_lang_.value_or(i18n::Lang::En) : i18n::parse(language).value_or(i18n::Lang::En);\n"
+             "  token_monitor_sync_language();"),
+            ("  if (lang_auto_) lang_ = hermes_lang_.value_or(i18n::Lang::En);",
+             "  if (lang_auto_) {\n    lang_ = hermes_lang_.value_or(i18n::Lang::En);\n    token_monitor_sync_language();\n  }"),
             ("void App::connect_now() {\n  reconnect_pending_ = false;",
              """void App::connect_now() {
   reconnect_pending_ = false;
@@ -148,6 +186,16 @@ def prepare(output, profile):
       for (const char* k : kSettingKeys)'''),
             ('@help commands: status |', '@help commands: status | tm |'),
         ],
+        "firmware/core/src/app_settings.cpp": [
+            ("    case Menu::Language: {\n      // English,",
+             """    case Menu::Language: {
+      if (token_monitor_.enabled()) {
+        token_monitor_set_language(lang_ == i18n::Lang::Zh ? stopwatch::Language::English
+                                                          : stopwatch::Language::Chinese);
+        break;
+      }
+      // English,"""),
+        ],
         "firmware/core/src/app_perf.cpp": [
             ("  if (ui_ && bench_ == Bench::None) ui_->render(m);",
              """  if (!ui_ || bench_ != Bench::None) return;
@@ -187,14 +235,25 @@ def prepare(output, profile):
         ],
         "firmware/esp32/platformio.ini": [
             ("platform = espressif32\n", "platform = platformio/espressif32@8.0.0\n"),
+            ("[env:m5stack-stopwatch]\nboard = esp32-s3-devkitc-1\n",
+             "[env:m5stack-stopwatch]\nboard = esp32-s3-devkitc-1\nboard_build.partitions = partitions-stopwatch.csv\n"),
+            ('    -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;boards/m5stack-stopwatch/sdkconfig.defaults"\n',
+             '    -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;boards/m5stack-stopwatch/sdkconfig.defaults"\n'
+             '    -DHG_CJK_FONT=ON\n'),
+        ],
+        "firmware/esp32/boards/m5stack-stopwatch/sdkconfig.defaults": [
+            ('CONFIG_IDF_TARGET="esp32s3"\n',
+             'CONFIG_IDF_TARGET="esp32s3"\nCONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions-stopwatch.csv"\n'),
         ],
     }
     overlays = {
         "firmware/core/include/hg/token_monitor.hpp": "token_monitor.hpp",
         "firmware/core/src/token_monitor.cpp": "token_monitor.cpp",
         "firmware/core/src/token_monitor_app.cpp": "token_monitor_app.cpp",
+        "firmware/core/src/i18n_zh.cpp": "i18n_zh.cpp",
         "firmware/esp32/main/token_monitor_http.cpp": "token_monitor_http.cpp",
         "firmware/esp32/main/token_monitor_http.hpp": "token_monitor_http.hpp",
+        "firmware/esp32/partitions-stopwatch.csv": "partitions-stopwatch.csv",
     }
 
     archive = subprocess.check_output(["git", "-C", str(UPSTREAM), "archive", "--format=tar", PIN])
