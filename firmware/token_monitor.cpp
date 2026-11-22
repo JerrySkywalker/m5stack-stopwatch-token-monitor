@@ -18,20 +18,46 @@ namespace {
 using hg::Canvas;
 using hg::json::Value;
 
-constexpr int kRows = 4;
+constexpr size_t kQuotaRows = 5;
+constexpr size_t kDeviceRows = 4;
 constexpr const char* kPages[] = {"Overview", "Quotas", "Trend", "Devices"};
-constexpr const char* kPagesZh[] = {"总览", "额度", "趋势", "设备"};
+constexpr const char* kPagesZh[] = {"总览", "剩余额度", "趋势", "设备"};
 constexpr std::array<uint32_t, 5> kIntervals{30, kDefaultRefreshSeconds, 120, 300, 900};
 constexpr int kSettingsTop = 132;
 constexpr int kSettingsStep = 66;
 constexpr int kSettingsHeight = 51;
 constexpr uint16_t kBackground = hg::rgb565(0, 0, 0);
-constexpr uint16_t kPanel = hg::rgb565(12, 23, 30);
-constexpr uint16_t kTrack = hg::rgb565(18, 47, 53);
-constexpr uint16_t kBright = hg::rgb565(232, 247, 249);
-constexpr uint16_t kMuted = hg::rgb565(155, 176, 186);
-constexpr uint16_t kTeal = hg::rgb565(68, 230, 203);
-constexpr uint16_t kOrange = hg::rgb565(255, 182, 96);
+constexpr uint16_t kPanel = hg::rgb565(16, 21, 31);
+constexpr uint16_t kTrack = hg::rgb565(39, 47, 63);
+constexpr uint16_t kBright = hg::rgb565(240, 244, 252);
+constexpr uint16_t kMuted = hg::rgb565(155, 170, 192);
+constexpr uint16_t kAccent = hg::rgb565(169, 191, 221);
+constexpr uint16_t kNeutral = hg::rgb565(121, 137, 161);
+constexpr uint16_t kHealthy = hg::rgb565(102, 217, 158);
+constexpr uint16_t kWarning = hg::rgb565(255, 126, 112);
+
+struct SourceStyle {
+  uint16_t color;
+  const char* label;
+};
+
+SourceStyle source_style(std::string_view source) {
+  source = source.substr(0, source.find(" #"));
+  std::string key;
+  for (char ch : source) {
+    if (ch >= 'A' && ch <= 'Z') ch += 'a' - 'A';
+    if ((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9')) key += ch;
+  }
+  if (key == "openai") return {hg::rgb565(88, 217, 234), "OpenAI"};
+  if (key == "codex" || key == "codexcli" || key == "openaicodex")
+    return {hg::rgb565(88, 217, 234), "Codex"};
+  if (key == "cursor" || key == "cursorcli") return {hg::rgb565(196, 155, 255), "Cursor"};
+  if (key == "gemini" || key == "geminicli") return {hg::rgb565(113, 156, 255), "Gemini"};
+  if (key == "opencode" || key == "opencodecli") return {hg::rgb565(255, 130, 183), "OpenCode"};
+  if (key == "githubcopilot" || key == "copilot" || key == "githubcopilotcli" || key == "copilotcli")
+    return {hg::rgb565(244, 209, 110), "GitHub Copilot"};
+  return {kNeutral, nullptr};
+}
 
 #include "token_monitor_glyphs.inc"
 
@@ -146,48 +172,80 @@ void settings_icon(Canvas& c) {
   c.fill_circle(x, y, 4, kBackground);
 }
 
-void overview(Canvas& c, const Value& data, bool models, bool zh) {
-  centered(c, 123, tr(zh, "TODAY TOKENS", "今日用量"), 2, kMuted);
-  centered(c, 145, compact(data["today"]["tokens"]), 5, kBright);
-  centered(c, 190, usd(data["today"]["cost"]) + tr(zh, " est.", " 预估"), 2, kTeal);
-  card(c, 217, 32);
-  text_at(c, 91, 226, tr(zh, "MONTH", "本月"), 2, kMuted);
-  right(c, 376, 226, compact(data["month"]["tokens"]) + " / " + usd(data["month"]["cost"]), 2, kBright);
-  text_at(c, 82, 264, models ? tr(zh, "TOP MODELS", "模型排行") : tr(zh, "TOP TOOLS", "工具排行"), 2, kMuted);
-  const auto& rows = data[models ? "models" : "tools"].elements();
-  if (rows.empty()) centered(c, 298, tr(zh, "No breakdown", "暂无明细"), 2, kMuted);
-  for (size_t index = 0; index < std::min<size_t>(3, rows.size()); ++index) {
-    const int y = 290 + static_cast<int>(index) * 24;
-    name_at(c, 87, y, rows[index]["label"].as_string(), 18);
-    right(c, 378, y, compact(rows[index]["tokens"]), 2, kTeal);
+void usage_band(Canvas& c, const Value& data, const Value& rows) {
+  constexpr int left = 90, y = 210, width = 286;
+  const double total = data["today"]["tokens"].as_number();
+  if (total <= 0 || !std::isfinite(total) || !rows.size()) return;
+  c.fill_rect(left, y, width, 5, kTrack);
+  double used = 0;
+  int start = 0;
+  for (const auto& row : rows.elements()) {
+    const double amount = row["tokens"].as_number();
+    if (amount <= 0 || !std::isfinite(amount)) continue;
+    used = std::min(total, used + amount);
+    const int end = static_cast<int>(std::round(width * (used / total)));
+    if (end > start) {
+      c.fill_rect(left + start, y, std::max(1, end - start - 2), 5,
+                  source_style(row["label"].as_string()).color);
+      start = end;
+    }
   }
-  centered(c, 365, models ? tr(zh, "Tap to see tools", "点按切换到工具")
+}
+
+void overview(Canvas& c, const Value& data, bool models, bool zh) {
+  centered(c, 120, tr(zh, "TODAY TOKENS", "今日用量"), 2, kMuted);
+  centered(c, 145, compact(data["today"]["tokens"]), 5, kBright);
+  centered(c, 185, usd(data["today"]["cost"]) + tr(zh, " est.", " 预估"), 2, kAccent);
+  if (!models) usage_band(c, data, data["tools"]);
+  card(c, 225, 31);
+  text_at(c, 91, 233, tr(zh, "MONTH", "本月"), 2, kMuted);
+  right(c, 376, 233, compact(data["month"]["tokens"]) + " / " + usd(data["month"]["cost"]), 2, kBright);
+  text_at(c, 87, 270, models ? tr(zh, "TOP MODELS", "模型排行") : tr(zh, "TOP TOOLS", "工具排行"), 2, kMuted);
+  const auto& rows = data[models ? "models" : "tools"];
+  if (rows.size() == 0) centered(c, 298, tr(zh, "No breakdown", "暂无明细"), 2, kMuted);
+  for (size_t index = 0; index < rows.size(); ++index) {
+    const int y = 292 + static_cast<int>(index) * 18;
+    const auto label = rows[index]["label"].as_string();
+    const auto style = models ? SourceStyle{kNeutral, nullptr} : source_style(label);
+    c.fill_circle(92, y + 6, 4, style.color);
+    name_at(c, 104, y, style.label ? std::string_view(style.label) : std::string_view(label), 15);
+    right(c, 378, y, compact(rows[index]["tokens"]), 2, kBright);
+  }
+  centered(c, 369, models ? tr(zh, "Tap to see tools", "点按切换到工具")
                           : tr(zh, "Tap to see models", "点按切换到模型"), 2, kMuted);
 }
 
 void quotas(Canvas& c, const Value& rows, size_t block, int64_t now, bool zh) {
   if (!rows.size()) centered(c, 213, tr(zh, "No quota data", "暂无额度数据"), 2, kMuted);
-  const size_t start = block * kRows;
-  for (size_t index = start; index < std::min(rows.size(), start + kRows); ++index) {
+  const size_t start = block * kQuotaRows;
+  for (size_t index = start; index < std::min(rows.size(), start + kQuotaRows); ++index) {
     const auto& row = rows[index];
-    const int y = 125 + static_cast<int>(index - start) * 58;
+    const int y = 120 + static_cast<int>(index - start) * 50;
     const int64_t reset = row["reset"].as_int();
     const bool stale = row["stale"].as_bool() || (reset && reset <= now);
     const double pct = row["pct"].as_number(-1);
-    const uint16_t accent = stale || (pct >= 0 && pct < 25) ? kOrange : kTeal;
-    card(c, y, 52);
-    name_at(c, 87, y + (zh ? 5 : 7), row["label"].as_string(), 25);
-    const int status_y = y + (zh ? 25 : 28);
-    const std::string amount = pct >= 0 && pct <= 100
-        ? tr(zh, "", "剩余 ") + std::to_string(static_cast<int>(std::round(pct))) + tr(zh, "% left", "%")
+    const bool known = pct >= 0 && pct <= 100;
+    const bool low = known && pct < 25;
+    const auto label = row["label"].as_string();
+    const uint16_t identity = source_style(label).color;
+    card(c, y, 46);
+    c.fill_round_rect(82, y + 7, 4, 29, 2, identity);
+    name_at(c, 92, y + 4, label, 25);
+    const int status_y = y + 25;
+    const std::string amount = known
+        ? std::string(low && !stale ? "! " : "") + std::to_string(static_cast<int>(std::round(pct))) + "%"
         : "--";
-    right(c, 378, status_y, amount, 2, accent);
-    name_at(c, 87, status_y, stale ? tr(zh, "Stale", "已过期")
-                                : reset ? tr(zh, "Reset ", "重置 ") + age(reset - now, zh) : "", 15, kMuted);
-    c.fill_rect(87, y + 46, 291, 2, kTrack);
-    if (pct >= 0 && pct <= 100) c.fill_rect(87, y + 46, static_cast<int>(291 * pct / 100), 2, accent);
+    right(c, 378, status_y, amount, 2, stale || low ? kWarning : kBright);
+    const std::string status = stale ? tr(zh, "Stale", "已过期")
+        : reset ? tr(zh, "Reset ", "重置 ") + age(reset - now, zh) : "";
+    name_at(c, 92, status_y, status, 16, stale ? kWarning : kMuted);
+    c.fill_rect(92, y + 43, 286, 2, kTrack);
+    if (known && !stale) {
+      const int filled = static_cast<int>(286 * pct / 100);
+      c.fill_rect(92, y + 43, filled, 2, low ? kWarning : identity);
+    }
   }
-  if (rows.size() > kRows) centered(c, 365, tr(zh, "Swipe up for more", "上滑查看更多"), 2, kMuted);
+  if (rows.size() > kQuotaRows) centered(c, 374, tr(zh, "Swipe up for more", "上滑查看更多"), 2, kMuted);
 }
 
 void trend(Canvas& c, const Value& rows, size_t detail, bool zh) {
@@ -219,10 +277,10 @@ void trend(Canvas& c, const Value& rows, size_t detail, bool zh) {
     const int x = 86 + static_cast<int>(i - start) * step;
     const int width = std::max(2, step - 3);
     if (amount < 0) {
-      c.fill_rect(x, bottom + 3, width, 2, kOrange);
+      c.fill_rect(x, bottom + 3, width, 2, kWarning);
     } else {
       const int h = largest > 0 ? std::max(1, static_cast<int>(100 * amount / largest)) : 1;
-      c.fill_rect(x, bottom - h, width, h, kTeal);
+      c.fill_rect(x, bottom - h, width, h, kAccent);
     }
   }
   name_at(c, 86, 329, rows[start]["day"].as_string(), 5, kMuted);
@@ -233,8 +291,8 @@ void trend(Canvas& c, const Value& rows, size_t detail, bool zh) {
 
 void devices(Canvas& c, const Value& rows, size_t block, int64_t now, bool zh) {
   if (!rows.size()) centered(c, 213, tr(zh, "No device data", "暂无设备数据"), 2, kMuted);
-  const size_t start = block * kRows;
-  for (size_t index = start; index < std::min(rows.size(), start + kRows); ++index) {
+  const size_t start = block * kDeviceRows;
+  for (size_t index = start; index < std::min(rows.size(), start + kDeviceRows); ++index) {
     const auto& row = rows[index];
     const int y = 125 + static_cast<int>(index - start) * 58;
     const int64_t seen = row["updated"].as_int();
@@ -245,11 +303,12 @@ void devices(Canvas& c, const Value& rows, size_t block, int64_t now, bool zh) {
     name_at(c, 88, title_y, zh && label.substr(0, 7) == "Device " ? "设备 " + label.substr(7) : label, 18);
     right(c, 377, y + 7, compact(row["tokens"]), 2, kBright);
     const bool stale = row["stale"].as_bool();
-    c.fill_circle(92, status_y + 6, 4, stale ? kOrange : kTeal);
-    text_at(c, 105, status_y, stale ? tr(zh, "Stale", "已过期") : tr(zh, "Reporting", "上报正常"), 2, stale ? kOrange : kTeal);
+    c.fill_circle(92, status_y + 6, 4, stale ? kWarning : kHealthy);
+    text_at(c, 105, status_y, stale ? tr(zh, "Stale", "已过期") : tr(zh, "Reporting", "上报正常"), 2,
+            stale ? kWarning : kHealthy);
     right(c, 377, status_y, !seen ? "--" : age(std::max<int64_t>(0, now - seen), zh) + tr(zh, " ago", "前"), 2, kMuted);
   }
-  if (rows.size() > kRows) centered(c, 365, tr(zh, "Swipe up for more", "上滑查看更多"), 2, kMuted);
+  if (rows.size() > kDeviceRows) centered(c, 365, tr(zh, "Swipe up for more", "上滑查看更多"), 2, kMuted);
 }
 
 void settings(Canvas& c, bool zh, uint32_t seconds, bool network) {
@@ -258,14 +317,14 @@ void settings(Canvas& c, bool zh, uint32_t seconds, bool network) {
                                             : std::to_string(seconds / 60) + tr(zh, " min", " 分钟");
   for (int row = 0; row < 3; ++row) card(c, row_y(row), kSettingsHeight);
   text_at(c, 94, row_y(0) + 18, tr(zh, "Language", "语言"), 2, kBright);
-  right(c, 371, row_y(0) + 18, tr(zh, "English", "简体中文"), 2, kTeal);
+  right(c, 371, row_y(0) + 18, tr(zh, "English", "简体中文"), 2, kAccent);
   text_at(c, 94, row_y(1) + 18, tr(zh, "Refresh interval", "拉取间隔"), 2, kBright);
-  right(c, 371, row_y(1) + 18, interval, 2, kTeal);
+  right(c, 371, row_y(1) + 18, interval, 2, kAccent);
   text_at(c, 94, row_y(2) + 18, tr(zh, "Refresh now", "立即刷新"), 2, kBright);
-  right(c, 371, row_y(2) + 18, ">", 2, kTeal);
+  right(c, 371, row_y(2) + 18, ">", 2, kAccent);
   centered(c, 362, tr(zh, "< Back", "< 返回"), 2, kBright);
   centered(c, 406, network ? tr(zh, "Network online", "网络已连接")
-                            : tr(zh, "Offline", "网络未连接"), 2, network ? kMuted : kOrange);
+                            : tr(zh, "Offline", "网络未连接"), 2, network ? kMuted : kWarning);
 }
 
 }  // namespace
@@ -311,7 +370,8 @@ bool TokenMonitor::ingest(std::string_view body, uint32_t now) {
   failed_ = false;
   if (page_ == 1 || page_ == 3) {
     const size_t count = data_[page_ == 1 ? "limits" : "devices"].size();
-    detail_ = std::min(detail_, count ? (count - 1) / kRows : 0);
+    const size_t per_page = page_ == 1 ? kQuotaRows : kDeviceRows;
+    detail_ = std::min(detail_, count ? (count - 1) / per_page : 0);
   }
   dirty_ = true;
   return true;
@@ -364,7 +424,8 @@ void TokenMonitor::detail() {
   size_t pages = page_ == 2 ? 4 : 2;
   if (page_ == 1 || page_ == 3) {
     const size_t count = data_[page_ == 1 ? "limits" : "devices"].size();
-    pages = std::max<size_t>(1, (count + kRows - 1) / kRows);
+    const size_t per_page = page_ == 1 ? kQuotaRows : kDeviceRows;
+    pages = std::max<size_t>(1, (count + per_page - 1) / per_page);
   }
   detail_ = (detail_ + 1) % pages;
   dirty_ = true;
@@ -430,10 +491,11 @@ void TokenMonitor::draw(hg::Display& display, uint32_t now, bool network, bool f
   Canvas c(display.framebuffer(), info.width, info.height, info.swap_bytes);
   c.fill_rect(0, 0, info.width, info.height, kBackground);
   c.ring(233, 233, 224, 2, kTrack);
-  c.arc(233, 233, 224, 3, page_ % 2 ? -1 : 1, kTeal);
+  c.arc(233, 233, 224, 2, page_ % 2 ? -1 : 1, kNeutral);
   const bool zh = language_ == Language::Chinese;
   centered(c, zh ? 47 : 57, tr(zh, "TOKEN MONITOR", "用量监控"), 2, kMuted);
-  centered(c, 82, settings_open_ ? tr(zh, "Settings", "设置") : (zh ? kPagesZh : kPages)[page_], 3, kBright);
+  const char* title = zh ? kPagesZh[page_] : page_ == 1 ? "Quota left" : kPages[page_];
+  centered(c, 82, settings_open_ ? tr(zh, "Settings", "设置") : title, 3, kBright);
   if (settings_open_) {
     settings(c, zh, refresh_seconds_, network);
     display.flush(0, info.height);
@@ -458,13 +520,13 @@ void TokenMonitor::draw(hg::Display& display, uint32_t now, bool network, bool f
                               : tr(zh, "Connect Wi-Fi", "请连接 Wi-Fi"), 2, kMuted);
     centered(c, 252, tr(zh, "Tap title for settings", "点按标题进入设置"), 2, kMuted);
   }
-  for (int i = 0; i < 4; ++i) c.fill_circle(209 + 16 * i, 392, i == page_ ? 4 : 2, i == page_ ? kTeal : kMuted);
+  for (int i = 0; i < 4; ++i) c.fill_circle(209 + 16 * i, 392, i == page_ ? 4 : 2, i == page_ ? kAccent : kMuted);
   const bool stale = failed_ || (present && elapsed >= 3 * refresh_seconds_) || !network;
   centered(c, 406, !present ? (network ? tr(zh, "Tap to refresh", "点按刷新")
                                        : tr(zh, "Offline", "离线"))
                             : (stale ? tr(zh, "Cached ", "缓存 ") : tr(zh, "Updated ", "更新 ")) +
                                   age(elapsed, zh) + tr(zh, " ago", "前"),
-           2, stale ? kOrange : kMuted);
+           2, stale ? kWarning : kMuted);
   display.flush(0, info.height);
 }
 
