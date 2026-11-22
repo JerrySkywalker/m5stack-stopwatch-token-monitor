@@ -34,6 +34,9 @@ and relay provisioning on the next boot.
 
 ## Simulator and local verification
 
+Run verification and firmware builds on your development machine. The local
+checks below cover the native core tests and the round-screen integration test.
+
 Install Python 3.12, CMake and a C++17 toolchain (Visual Studio C++ on Windows).
 Tkinter is needed for the interactive window. Clone with
 `git clone --recurse-submodules` or run `git submodule update --init --recursive`.
@@ -63,9 +66,10 @@ The build locks the Gadget SDK, ESP32 board environment and PlatformIO platform.
 Use a short build path on Windows, for example
 `python tools/build_firmware.py --build-dir C:/Dev/build/stopwatch/watch`.
 The output contains a merged image (flash at `0x0`), an app-only image, license
-notices and a SHA-256 receipt. The matching GitHub Actions job also packages
-the standalone profile. The `--profile personal` switch builds the same
-dashboard plus the upstream Hermes transport and audio behavior.
+notices and a SHA-256 receipt. The `--profile personal` switch builds the same
+dashboard plus the upstream Hermes transport and audio behavior. On Windows,
+WSL can run the firmware build in a Linux-native directory and write the
+completed artifacts to a Windows path via `/mnt/c`.
 
 Back up the full original flash using the
 [StopWatch upstream instructions](https://github.com/Adolanium/hermes-gadget-sdk/blob/v0.6.0/docs/hardware.md#m5stack-stopwatch)
