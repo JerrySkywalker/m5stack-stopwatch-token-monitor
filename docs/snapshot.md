@@ -13,11 +13,12 @@ device traffic do not need to access the Hub's larger response structure.
 | `limits` | Up to 12 rows of `label`, remaining `pct`, epoch-seconds `reset`, `stale` |
 | `limitsMore` | Optional extension of up to 12 additional quota rows |
 | `trend` | Up to 30 ascending daily points with `day` (MM-DD), `tokens`, `cost` |
-| `devices` | Up to 12 rows of `label`, today's `tokens`, epoch-seconds `updated`, `stale` |
+| `devices` | Up to 12 rows of `label`, today's `tokens`, epoch-seconds `updated`, `stale`. Optional `named: true` identifies a Hub hostname |
 
 An unavailable reading is `null`, not zero. Unavailable trends remain blank;
-individual missing days are preserved as gaps. The adapter aliases devices
-and accounts. The watch keeps the previous valid snapshot after transport or
+individual missing days are preserved as gaps. The adapter aliases accounts
+and aliases devices by default. An authenticated adapter with
+`--show-device-names` can include hostnames. The watch keeps the previous valid snapshot after transport or
 schema errors and labels it cached until the next successful refresh.
 History is cached by the adapter for five minutes and uses UTC dates.
 

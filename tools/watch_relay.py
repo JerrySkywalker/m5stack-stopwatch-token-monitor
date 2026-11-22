@@ -139,25 +139,30 @@ def quota_rows(stats, now):
     return rows
 
 
-def device_rows(stats, now):
+def device_rows(stats, now, *, show_device_names=False):
     rows = []
     stale_after = number(stats.get("staleAfterMs"))
     for index, raw in enumerate(items(stats.get("devices"))[:12], start=1):
         device = obj(raw)
         updated = epoch(device.get("receivedAt") or device.get("updatedAt"))
         today = obj(obj(device.get("periods")).get("today") or device.get("today"))
-        rows.append(
-            {
-                "label": f"Device {index}",
-                "tokens": number(today.get("totalTokens")),
-                "updated": updated,
-                "stale": (
-                    device.get("stale") is True
-                    or updated is None
-                    or (stale_after is not None and (now - updated) * 1000 > stale_after)
-                ),
-            }
-        )
+        row = {
+            "label": f"Device {index}",
+            "tokens": number(today.get("totalTokens")),
+            "updated": updated,
+            "stale": (
+                device.get("stale") is True
+                or updated is None
+                or (stale_after is not None and (now - updated) * 1000 > stale_after)
+            ),
+        }
+        if show_device_names:
+            hostname = device.get("hostname")
+            if isinstance(hostname, str):
+                name = " ".join("".join(ch if ch.isprintable() else " " for ch in hostname).split())[:22].rstrip()
+                if name:
+                    row.update(label=name, named=True)
+        rows.append(row)
     return rows
 
 
@@ -185,7 +190,7 @@ def trend_rows(history, now):
     ]
 
 
-def snapshot(stats, history, now):
+def snapshot(stats, history, now, *, show_device_names=False):
     stats = obj(stats)
     periods = obj(stats.get("periods"))
     if not isinstance(periods.get("today"), dict):
@@ -202,7 +207,7 @@ def snapshot(stats, history, now):
         "limits": limits[:LEGACY_QUOTA_ROWS],
         "limitsMore": limits[LEGACY_QUOTA_ROWS:],
         "trend": trend_rows(history, now),
-        "devices": device_rows(stats, now),
+        "devices": device_rows(stats, now, show_device_names=show_device_names),
     }
 
 
@@ -242,9 +247,10 @@ def hub_reader(base, secret, allow_http=False):
 
 
 class Feed:
-    def __init__(self, read, *, now=time.time):
+    def __init__(self, read, *, now=time.time, show_device_names=False):
         self.read = read
         self.now = now
+        self.show_device_names = show_device_names
         self.body = None
         self.history = {}
         self.next_stats = self.next_history = 0
@@ -263,7 +269,7 @@ class Feed:
                 except (ValueError, OSError):
                     self.next_history = now + 30
             body = json.dumps(
-                snapshot(stats, self.history, now),
+                snapshot(stats, self.history, now, show_device_names=self.show_device_names),
                 separators=(",", ":"),
                 allow_nan=False,
             ).encode("ascii")
@@ -308,6 +314,7 @@ def main():
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=17322)
     parser.add_argument("--fixture", action="store_true", help="Serve synthetic test data")
+    parser.add_argument("--show-device-names", action="store_true", help="Include Hub hostnames in the protected snapshot")
     args = parser.parse_args()
     try:
         loopback = ipaddress.ip_address(args.host).is_loopback
@@ -318,6 +325,8 @@ def main():
     watch_secret = os.environ.get("STOPWATCH_DEVICE_TOKEN")
     if not loopback and not watch_secret and not args.fixture:
         parser.error("A non-loopback upstream relay requires STOPWATCH_DEVICE_TOKEN")
+    if args.show_device_names and not watch_secret and not args.fixture:
+        parser.error("Real device names require STOPWATCH_DEVICE_TOKEN")
     if args.fixture:
         from fixture_data import fixture
         read = lambda path: fixture(int(time.time()))[path]
@@ -327,7 +336,7 @@ def main():
         if not base or not secret:
             parser.error("Set STOPWATCH_HUB_URL and TOKEN_MONITOR_SECRET in this process")
         read = hub_reader(base, secret)
-    with serve((args.host, args.port), Feed(read), watch_secret) as server:
+    with serve((args.host, args.port), Feed(read, show_device_names=args.show_device_names), watch_secret) as server:
         print(f"Listening on {args.host}:{server.server_port}{SNAPSHOT_PATH}", flush=True)
         server.serve_forever()
 

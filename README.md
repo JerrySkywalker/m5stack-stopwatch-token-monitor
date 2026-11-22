@@ -12,6 +12,10 @@ same dashboard and data format. This is a community project.
 | Trend | 7 or 30 days of tokens or estimated cost. Gaps indicate missing data |
 | Devices | Per-device totals and freshness without exposing hostnames by default |
 
+The outer ring shows the lowest fresh remaining quota in the selected
+**Short-term** or **Cycle** view. Its fill uses the provider's color. The
+header names the provider and shows its percentage on every dashboard page.
+
 Swipe horizontally to change views. Tap the body or swipe up to cycle the
 current view's details. Tap the footer to refresh. Hold the title and
 release to open the Hermes Gadget hardware settings. The standalone blue button refreshes and
@@ -81,7 +85,8 @@ when updating a customized device.
 
 `tools/watch_relay.py` reads the existing Javis603/token-monitor Node Hub.
 The watch polls only `/watch/v1/snapshot`. The adapter projects a bounded,
-read-only response with no prompts, hostnames, email addresses or credentials.
+read-only response. It aliases devices by default and excludes prompts,
+email addresses and credentials.
 It recognizes the Token Monitor v0.92.0 Hub contract. See
 [the snapshot format](docs/snapshot.md).
 
@@ -90,6 +95,10 @@ To use a real Hub, provide `STOPWATCH_HUB_URL` and `TOKEN_MONITOR_SECRET`
 in the adapter process environment, plus `STOPWATCH_DEVICE_TOKEN` for the
 watch. Run the adapter behind your HTTPS reverse proxy on a protected
 loopback or service network. The Hub secret is used only by the adapter.
+
+Pass `--show-device-names` to show the Hub hostnames in the authenticated
+watch snapshot. A device with no hostname keeps its numbered label. Long names
+may be shortened on the watch.
 
 Use the upstream Wi-Fi setup and a **USB console** at 115200 baud to provision
 the watch. The `tm status` command reports configuration and HTTP state without

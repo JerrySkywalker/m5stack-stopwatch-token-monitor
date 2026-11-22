@@ -102,7 +102,16 @@ def relay_checks():
             handler.available = True
             recovered = get()
             assert json.loads(recovered)["asOf"] > parsed["asOf"]
-            return body, recovered
+
+        named_feed = Feed(source, now=lambda: clock[0], show_device_names=True)
+        with running(serve(("127.0.0.1", 0), named_feed, "fixture-watch")) as relay:
+            req = Request(f"http://127.0.0.1:{relay.server_port}{SNAPSHOT_PATH}",
+                          headers={"Authorization": "Bearer fixture-watch"})
+            with direct.open(req, timeout=3) as response:
+                named = json.load(response)["devices"]
+            assert [row["label"] for row in named] == ["synthetic-private-host", "Device 2"]
+            assert named[0]["named"] and "named" not in named[1]
+        return body, recovered
 
 
 def sim_status(sim):
@@ -127,7 +136,7 @@ def tap_at(sim, x, y):
     sim.run_for(0.08)
 
 
-def quota_split(sim):
+def quota_split(sim, output):
     now = int(time.time())
     data = fixture(now)
     stats = data["/api/stats"]
@@ -139,18 +148,35 @@ def quota_split(sim):
             {"kind": "billing", "windowMinutes": 43200, "remainingPercent": 85},
             {"kind": "other", "remainingPercent": 99},
         ],
+    }, {
+        "provider": "cursor",
+        "windows": [{"kind": "session", "remainingPercent": 25}],
+    }, {
+        "provider": "gemini",
+        "stale": True,
+        "windows": [{"kind": "session", "remainingPercent": 1}],
     }]
     payload = snapshot(stats, data["/api/history"], now)
     assert [(row["period"], row["pct"]) for row in payload["limits"]] == [
-        ("session", 100), ("week", 70), ("month", 85), ("unknown", 99),
+        ("session", 100), ("week", 70), ("month", 85), ("unknown", 99), ("session", 25), ("session", 1),
     ]
     assert sim.console("tm inject " + json.dumps(payload, separators=(",", ":"))) == "@ok snapshot"
     tap_at(sim, 156, 132)
     state = sim_status(sim)
-    assert state["quota_view"] == "short" and state["quota_count"] == 1
+    assert state["quota_view"] == "short" and state["quota_count"] == 3
+    # At 9 o'clock a 25% fill reaches the perimeter, but a stale 1% fill does not.
+    offset = 11 * 3
+    short_color = sim.rgb888(233, 234)[offset:offset + 3]
+    assert short_color[2] > short_color[0] > short_color[1] > 100  # Cursor purple
+    sim.screenshot(output / "11-ring-short.png")
     tap_at(sim, 300, 132)
     state = sim_status(sim)
     assert state["quota_view"] == "cycle" and state["quota_count"] == 2
+    cycle_color = sim.rgb888(233, 234)[offset:offset + 3]
+    assert cycle_color[0] > cycle_color[2] > cycle_color[1] > 100  # OpenCode pink
+    sim.screenshot(output / "12-ring-cycle.png")
+    assert sim.console("tm inject-error") == "@ok simulated relay failure"
+    assert max(sim.rgb888(233, 234)[offset:offset + 3]) < 100  # Cached data leaves an empty track.
     for item in payload["limits"]:
         item.pop("period")
     payload.pop("limitsMore")
@@ -237,7 +263,7 @@ def standalone(body, recovered, output):
             sim.run_for(0.10)
             assert sim_status(sim)["refresh_requested"] == before + 1
             settings_ui(sim, output)
-            quota_split(sim)
+            quota_split(sim, output)
         finally:
             sim.close()
         restarted = Simulator(board="sim-466x466-round", state_dir=state_dir)

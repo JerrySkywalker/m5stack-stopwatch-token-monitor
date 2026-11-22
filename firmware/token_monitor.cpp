@@ -264,6 +264,64 @@ bool quota_stale(const Value& row, int64_t now) {
   return row["stale"].as_bool() || (reset && reset <= now);
 }
 
+const Value* lowest_quota(const Value& data, bool cycle, int64_t now) {
+  const Value* lowest = nullptr;
+  double remaining = 101;
+  const auto quotas = quota_rows(data, cycle);
+  for (size_t index = 0; index < quotas.count; ++index) {
+    const auto& row = *quotas.rows[index];
+    const double percent = row["pct"].as_number(-1);
+    if (percent >= 0 && percent <= 100 && percent < remaining && !quota_stale(row, now)) {
+      lowest = &row;
+      remaining = percent;
+    }
+  }
+  return lowest;
+}
+
+void quota_ring(Canvas& c, const Value* quota, bool cycle, bool zh, bool settings_open) {
+  constexpr int radius = 222;
+  constexpr int start = 120;
+  constexpr int sweep = 300;
+  constexpr float radians_per_degree = 0.0174532925f;
+  const double remaining = quota ? (*quota)["pct"].as_number() : 0;
+  const int filled = static_cast<int>(std::round(sweep * remaining / 100));
+  const std::string_view label = quota ? std::string_view((*quota)["label"].as_string()) : std::string_view{};
+  const auto style = source_style(label);
+  const auto paint = [&](int through, uint16_t color, int thickness) {
+    for (int degree = 0; degree <= through; ++degree) {
+      const float angle = (start + degree) * radians_per_degree;
+      const int x = 233 + static_cast<int>(std::round(radius * std::cos(angle)));
+      const int y = 233 + static_cast<int>(std::round(radius * std::sin(angle)));
+      c.fill_circle(x, y, thickness, color);
+    }
+  };
+  paint(sweep, kTrack, 3);
+  if (filled > 0) paint(filled, style.color, 4);
+  if (settings_open) return;
+
+  const auto* window = cycle ? tr(zh, "CYCLE", "周期") : tr(zh, "SHORT", "短时");
+  const int summary_y = zh ? 53 : 57;
+  std::string summary(window);
+  if (!quota) {
+    centered(c, summary_y, summary + " / --", 2, kMuted);
+    return;
+  }
+  std::string_view provider = style.label ? std::string_view(style.label) : label.substr(0, label.find(" #"));
+  if (provider.empty()) provider = "Quota";
+  if (provider == "GitHub Copilot") provider = "Copilot";
+  summary += ' ';
+  constexpr size_t provider_columns = 11;
+  if (measure_text(provider, provider_columns).bytes < provider.size()) {
+    summary += provider.substr(0, measure_text(provider, provider_columns - 1).bytes);
+    summary += '~';
+  } else {
+    summary += provider;
+  }
+  summary += " " + std::to_string(static_cast<int>(std::round(remaining))) + "%";
+  centered(c, summary_y, summary, 2, remaining <= 10 ? kWarning : style.color);
+}
+
 std::string quota_caption(const Value& row, bool zh) {
   const auto period = quota_period(row);
   const auto minutes = row["minutes"].as_int();
@@ -391,8 +449,12 @@ void devices(Canvas& c, const Value& rows, size_t block, int64_t now, bool zh) {
     const auto label = row["label"].as_string();
     const int title_y = y + (zh ? 6 : 7);
     const int status_y = y + (zh ? 32 : 29);
-    name_at(c, 88, title_y, zh && label.substr(0, 7) == "Device " ? "设备 " + label.substr(7) : label, 18);
-    right(c, 377, y + 7, compact(row["tokens"]), 2, kBright);
+    const auto tokens = compact(row["tokens"]);
+    const bool alias = !row["named"].as_bool() && label.substr(0, 7) == "Device ";
+    const int available = 377 - 88 - 12 - text_width(tokens, 2);
+    name_at(c, 88, title_y, zh && alias ? "设备 " + label.substr(7) : label,
+            static_cast<size_t>(available / (hg::font::kCellWidth * 2)));
+    right(c, 377, y + 7, tokens, 2, kBright);
     const bool stale = row["stale"].as_bool();
     c.fill_circle(92, status_y + 6, 4, stale ? kWarning : kHealthy);
     text_at(c, 105, status_y, stale ? tr(zh, "Stale", "已过期") : tr(zh, "Reporting", "上报正常"), 2,
@@ -591,10 +653,13 @@ void TokenMonitor::draw(hg::Display& display, uint32_t now, bool network, bool f
   last_frame_ = now;
   Canvas c(display.framebuffer(), info.width, info.height, info.swap_bytes);
   c.fill_rect(0, 0, info.width, info.height, kBackground);
-  c.ring(233, 233, 224, 2, kTrack);
-  c.arc(233, 233, 224, 2, page_ % 2 ? -1 : 1, kNeutral);
   const bool zh = language_ == Language::Chinese;
-  centered(c, zh ? 47 : 57, tr(zh, "TOKEN MONITOR", "用量监控"), 2, kMuted);
+  const bool present = data_.is_object();
+  const int64_t elapsed = static_cast<uint32_t>(now - received_at_) / 1000;
+  const int64_t server_now = data_["asOf"].as_int() + elapsed;
+  const bool stale = failed_ || (present && elapsed >= 3 * refresh_seconds_) || !network;
+  const auto* quota = present && !stale && !settings_open_ ? lowest_quota(data_, cycle_quotas_, server_now) : nullptr;
+  quota_ring(c, quota, cycle_quotas_, zh, settings_open_);
   const char* title = zh ? kPagesZh[page_] : page_ == 1 ? "Quota left" : kPages[page_];
   centered(c, 82, settings_open_ ? tr(zh, "Settings", "设置") : title, 3, kBright);
   if (settings_open_) {
@@ -604,9 +669,6 @@ void TokenMonitor::draw(hg::Display& display, uint32_t now, bool network, bool f
   }
   settings_icon(c);
 
-  const bool present = data_.is_object();
-  const int64_t elapsed = static_cast<uint32_t>(now - received_at_) / 1000;
-  const int64_t server_now = data_["asOf"].as_int() + elapsed;
   if (present) {
     switch (page_) {
       case 0: overview(c, data_, detail_ != 0, zh); break;
@@ -622,7 +684,6 @@ void TokenMonitor::draw(hg::Display& display, uint32_t now, bool network, bool f
     centered(c, 252, tr(zh, "Tap title for settings", "点按标题进入设置"), 2, kMuted);
   }
   for (int i = 0; i < 4; ++i) c.fill_circle(209 + 16 * i, 392, i == page_ ? 4 : 2, i == page_ ? kAccent : kMuted);
-  const bool stale = failed_ || (present && elapsed >= 3 * refresh_seconds_) || !network;
   centered(c, 406, !present ? (network ? tr(zh, "Tap to refresh", "点按刷新")
                                        : tr(zh, "Offline", "离线"))
                             : (stale ? tr(zh, "Cached ", "缓存 ") : tr(zh, "Updated ", "更新 ")) +
