@@ -246,6 +246,13 @@ constexpr size_t kLangCount = static_cast<size_t>(Lang::Zh);
              'CONFIG_IDF_TARGET="esp32s3"\nCONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions-stopwatch.csv"\n'),
         ],
     }
+    if profile == "personal":
+        patches["firmware/esp32/boards/m5stack-stopwatch/sdkconfig.defaults"].append((
+            "CONFIG_HG_BOARD_STOPWATCH=y\n",
+            "CONFIG_HG_BOARD_STOPWATCH=y\n"
+            "# Allocate TLS record buffers on demand for the simultaneous WSS and HTTPS clients.\n"
+            "CONFIG_MBEDTLS_DYNAMIC_BUFFER=y\n",
+        ))
     overlays = {
         "firmware/core/include/hg/token_monitor.hpp": "token_monitor.hpp",
         "firmware/core/src/token_monitor.cpp": "token_monitor.cpp",
