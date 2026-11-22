@@ -86,9 +86,10 @@ dashboard plus the upstream Hermes transport and audio behavior. On Windows,
 WSL can run the firmware build in a Linux-native directory and write the
 completed artifacts to a Windows path via `/mnt/c`.
 
-The CJK builds use two 2304 KiB application slots. An upgrade from the
-old partition table needs a USB partition-table update in addition to the app.
-The address of the NVS settings partition stays at `0x9000`.
+The CJK builds use two 2304 KiB application slots. Use a fresh build directory
+when moving from the old SDK configuration. An upgrade from the old partition
+table needs a USB partition-table update in addition to the app. The address of
+the NVS settings partition stays at `0x9000`.
 
 Back up the full original flash using the
 [StopWatch upstream instructions](https://github.com/Adolanium/hermes-gadget-sdk/blob/v0.6.0/docs/hardware.md#m5stack-stopwatch)

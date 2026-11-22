@@ -334,7 +334,7 @@ def standalone(body, recovered, output):
             upgraded.close()
 
 
-def combined(url, body, output, publish_reply):
+def combined(url, body, output, publish_reply, finish_reply):
     from hermes_gadget.sim import Simulator
 
     sim = Simulator(url=url, board="sim-466x466-round", state_dir=output / "personal-nvs")
@@ -352,6 +352,7 @@ def combined(url, body, output, publish_reply):
         sim.run_for(0.45)
         sim.release("talk")
         assert sim.wait_screen("ready", timeout=20)
+        assert sim.wait_for(lambda: sim_status(sim)["visible"], timeout=30)
         assert sim_status(sim)["page"] == "Quotas" and sim_status(sim)["visible"]
         sim.screenshot(output / "7-personal-return.png")
         assert sim.console("set language en") == "@ok language"
@@ -377,22 +378,24 @@ def combined(url, body, output, publish_reply):
         assert sim.console("settings close") == "@ok settings closed"
         chinese = (
             "腕表已连上本地网关。\n"
-            "这是一条中文回复。用量监控会保留你选择的额度页，向上滑动可以查看后续内容。\n"
+            "这是一条中文回复。用量监控会保留你选择的额度页，腕表会自动翻页显示后续内容。\n"
             "圆屏会自动换行，数字和中文标点也可以一起显示。今天的示例额度是 70%。\n"
-            "这是继续下滑后看到的内容。屏幕上会保留前后句的顺序，方便在腕表上读完一段回复。"
+            "这是第二页的内容。屏幕上会保留前后句的顺序，方便在腕表上读完一段回复。"
         )
         publish_reply(chinese)
         assert sim.wait_for(lambda: (sim.last_received("reply") or {}).get("text") == chinese, timeout=6)
         assert sim.wait_screen("responding", timeout=4)
         assert not sim_status(sim)["visible"]
-        first_frame = sim.screenshot(output / "16-hermes-reply-zh.png").read_bytes()
-        sim.touch(True, 235, 341)
-        sim.run_for(0.08)
-        sim.touch(True, 235, 142)
-        sim.run_for(0.08)
-        sim.touch(False)
-        sim.run_for(0.08)
-        assert sim.screenshot(output / "17-hermes-reply-scroll-zh.png").read_bytes() != first_frame
+        sim.screenshot(output / "16-hermes-reply-zh.png")
+        finish_reply()
+        assert sim.wait_screen("ready", timeout=4)
+        assert not sim_status(sim)["visible"]
+        first_body = sim.rgb888(170, 355)
+        assert sim.wait_for(lambda: sim.rgb888(170, 355) != first_body, timeout=12)
+        assert not sim_status(sim)["visible"]
+        sim.screenshot(output / "17-hermes-reply-page-2-zh.png")
+        assert sim.wait_for(lambda: sim_status(sim)["visible"], timeout=25)
+        assert sim_status(sim)["page"] == "Quotas"
     finally:
         sim.close()
 
@@ -411,19 +414,28 @@ async def gateway(body, output):
     try:
         hub = await asyncio.wait_for(ready, 6)
 
+        turn = "local-chinese-preview"
+
         async def send(text):
             session, = hub.sessions.values()
             assert session.charset == "cjk"
             shaped = textfmt.for_device(text, session.charset)
             assert shaped == text
-            turn = "local-chinese-preview"
             await session.turn_start(turn)
             await session.send_reply(shaped, turn=turn)
+
+        async def finish():
+            session, = hub.sessions.values()
+            await session.turn_end(turn, "success")
 
         def publish_reply(text):
             asyncio.run_coroutine_threadsafe(send(text), loop).result(timeout=6)
 
-        await asyncio.to_thread(combined, f"ws://127.0.0.1:{hub.bound_port}/gadget", body, output, publish_reply)
+        def finish_reply():
+            asyncio.run_coroutine_threadsafe(finish(), loop).result(timeout=6)
+
+        await asyncio.to_thread(combined, f"ws://127.0.0.1:{hub.bound_port}/gadget",
+                                body, output, publish_reply, finish_reply)
     finally:
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):

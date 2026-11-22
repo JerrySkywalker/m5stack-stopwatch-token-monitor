@@ -136,7 +136,7 @@ constexpr size_t kLangCount = static_cast<size_t>(Lang::Zh);
   void token_monitor_sync_language();
   bool token_monitor_set_language(stopwatch::Language language);
   bool token_monitor_set_interval(uint32_t seconds);
-  bool token_monitor_screen(Screen screen) const;
+  bool token_monitor_screen(const UiModel& model) const;
   std::string token_monitor_command(std::string_view args);"""),
         ],
         "firmware/core/src/app.cpp": [
@@ -199,7 +199,7 @@ constexpr size_t kLangCount = static_cast<size_t>(Lang::Zh);
         "firmware/core/src/app_perf.cpp": [
             ("  if (ui_ && bench_ == Bench::None) ui_->render(m);",
              """  if (!ui_ || bench_ != Bench::None) return;
-  const bool watch = token_monitor_screen(m.screen);
+  const bool watch = token_monitor_screen(m);
   if (watch) {
     token_monitor_.draw(*hal_.display, now(), network_up_, !token_monitor_rendered_);
   } else {

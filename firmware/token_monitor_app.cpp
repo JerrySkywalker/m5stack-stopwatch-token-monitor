@@ -98,8 +98,10 @@ bool App::token_monitor_set_interval(uint32_t seconds) {
   return true;
 }
 
-bool App::token_monitor_screen(Screen screen) const {
+bool App::token_monitor_screen(const UiModel& model) const {
   if (!token_monitor_.enabled() || token_monitor_.hidden()) return false;
+  const auto screen = model.screen;
+  if (screen == Screen::Ready && token_monitor_.combined() && !model.hero) return false;
   return screen == Screen::Ready || screen == Screen::Offline || screen == Screen::Clock ||
          screen == Screen::Connecting || (screen == Screen::Error && server_url_.empty());
 }
