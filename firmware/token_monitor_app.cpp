@@ -159,6 +159,8 @@ std::string App::token_monitor_command(std::string_view args) {
         .set("relay_configured", !tm_endpoint_.empty())
         .set("authenticated", !tm_token_.empty())
         .set("language", token_monitor_.language() == stopwatch::Language::Chinese ? "zh" : "en")
+        .set("quota_view", token_monitor_.cycle_quotas() ? "cycle" : "short")
+        .set("quota_count", static_cast<int>(token_monitor_.quota_count()))
         .set("interval_seconds", token_monitor_.refresh_seconds())
         .set("status", tm_http_status_)
         .set("refresh_requested", token_monitor_.refresh_id());

@@ -14,7 +14,7 @@ from urllib.error import HTTPError
 from urllib.request import Request, build_opener, ProxyHandler
 
 from fixture_data import fixture
-from watch_relay import Feed, SNAPSHOT_PATH, hub_reader, serve
+from watch_relay import Feed, SNAPSHOT_PATH, hub_reader, serve, snapshot
 
 
 @contextlib.contextmanager
@@ -127,6 +127,37 @@ def tap_at(sim, x, y):
     sim.run_for(0.08)
 
 
+def quota_split(sim):
+    now = int(time.time())
+    data = fixture(now)
+    stats = data["/api/stats"]
+    stats["limits"]["providers"] = [{
+        "provider": "opencode",
+        "windows": [
+            {"kind": "session", "windowMinutes": 300, "remainingPercent": 100},
+            {"kind": "weekly", "windowMinutes": 10080, "remainingPercent": 70},
+            {"kind": "billing", "windowMinutes": 43200, "remainingPercent": 85},
+            {"kind": "other", "remainingPercent": 99},
+        ],
+    }]
+    payload = snapshot(stats, data["/api/history"], now)
+    assert [(row["period"], row["pct"]) for row in payload["limits"]] == [
+        ("session", 100), ("week", 70), ("month", 85), ("unknown", 99),
+    ]
+    assert sim.console("tm inject " + json.dumps(payload, separators=(",", ":"))) == "@ok snapshot"
+    tap_at(sim, 156, 132)
+    state = sim_status(sim)
+    assert state["quota_view"] == "short" and state["quota_count"] == 1
+    tap_at(sim, 300, 132)
+    state = sim_status(sim)
+    assert state["quota_view"] == "cycle" and state["quota_count"] == 2
+    for item in payload["limits"]:
+        item.pop("period")
+    payload.pop("limitsMore")
+    assert sim.console("tm inject " + json.dumps(payload, separators=(",", ":"))) == "@ok snapshot"
+    assert sim_status(sim)["quota_count"] == 2
+
+
 def settings_ui(sim, output):
     swipe_left(sim)
     assert sim_status(sim)["page"] == "Quotas"
@@ -206,6 +237,7 @@ def standalone(body, recovered, output):
             sim.run_for(0.10)
             assert sim_status(sim)["refresh_requested"] == before + 1
             settings_ui(sim, output)
+            quota_split(sim)
         finally:
             sim.close()
         restarted = Simulator(board="sim-466x466-round", state_dir=state_dir)

@@ -18,7 +18,10 @@ namespace {
 using hg::Canvas;
 using hg::json::Value;
 
-constexpr size_t kQuotaRows = 5;
+constexpr size_t kQuotaRows = 4;
+constexpr size_t kLegacyQuotaRows = 12;
+constexpr int kQuotaTabsY = 118;
+constexpr int kQuotaTabsHeight = 30;
 constexpr size_t kDeviceRows = 4;
 constexpr const char* kPages[] = {"Overview", "Quotas", "Trend", "Devices"};
 constexpr const char* kPagesZh[] = {"总览", "剩余额度", "趋势", "设备"};
@@ -56,6 +59,7 @@ SourceStyle source_style(std::string_view source) {
   if (key == "opencode" || key == "opencodecli") return {hg::rgb565(255, 130, 183), "OpenCode"};
   if (key == "githubcopilot" || key == "copilot" || key == "githubcopilotcli" || key == "copilotcli")
     return {hg::rgb565(244, 209, 110), "GitHub Copilot"};
+  if (key == "antigravity") return {hg::rgb565(145, 215, 137), "Antigravity"};
   return {kNeutral, nullptr};
 }
 
@@ -215,37 +219,124 @@ void overview(Canvas& c, const Value& data, bool models, bool zh) {
                           : tr(zh, "Tap to see models", "点按切换到模型"), 2, kMuted);
 }
 
-void quotas(Canvas& c, const Value& rows, size_t block, int64_t now, bool zh) {
-  if (!rows.size()) centered(c, 213, tr(zh, "No quota data", "暂无额度数据"), 2, kMuted);
+std::string_view quota_period(const Value& row) {
+  const auto& period = row["period"].as_string();
+  if (!period.empty()) return period;
+
+  // Older relays only sent the combined title. Match explicit period words,
+  // and leave generic windows unclassified.
+  const std::string_view label = row["label"].as_string();
+  const auto account = label.find(" #");
+  const auto window = account == label.npos ? label.npos : label.find(' ', account + 2);
+  if (window == label.npos) return "unknown";
+  std::string suffix(label.substr(window + 1));
+  for (auto& ch : suffix) {
+    if (ch >= 'A' && ch <= 'Z') ch += 'a' - 'A';
+  }
+  if (suffix == "session" || suffix == "5h" || suffix.find("5-hour") != suffix.npos) return "session";
+  if (suffix == "day" || suffix == "daily") return "day";
+  if (suffix == "week" || suffix.find("weekly") != suffix.npos) return "week";
+  if (suffix == "month" || suffix.find("monthly") != suffix.npos) return "month";
+  if (suffix == "billing") return "billing";
+  return "unknown";
+}
+
+struct QuotaRows {
+  std::array<const Value*, 2 * kLegacyQuotaRows> rows{};
+  size_t count = 0;
+};
+
+QuotaRows quota_rows(const Value& data, bool cycle) {
+  QuotaRows result;
+  for (auto field : {"limits", "limitsMore"}) {
+    for (const auto& row : data[field].elements()) {
+      const auto period = quota_period(row);
+      const bool matches = cycle ? (period == "week" || period == "month" || period == "billing" || period == "cycle")
+                                 : (period == "session" || period == "day");
+      if (matches && result.count < result.rows.size()) result.rows[result.count++] = &row;
+    }
+  }
+  return result;
+}
+
+bool quota_stale(const Value& row, int64_t now) {
+  const int64_t reset = row["reset"].as_int();
+  return row["stale"].as_bool() || (reset && reset <= now);
+}
+
+std::string quota_caption(const Value& row, bool zh) {
+  const auto period = quota_period(row);
+  const auto minutes = row["minutes"].as_int();
+  if (period == "day") return tr(zh, "Daily", "每日");
+  if (period == "week") return tr(zh, "Weekly", "每周");
+  if (period == "month") return tr(zh, "Monthly", "月度");
+  if (period == "billing") return tr(zh, "Billing", "账期");
+  if (period == "cycle")
+    return minutes >= 1440 ? std::to_string(minutes / 1440) + "d" : tr(zh, "Cycle", "周期");
+  if (minutes <= 0) return tr(zh, "Session", "会话");
+  if (minutes < 60) return std::to_string(minutes) + "m";
+  const auto rest = minutes % 60;
+  return std::to_string(minutes / 60) + "h" + (rest ? std::to_string(rest) + "m" : "");
+}
+
+void quota_tabs(Canvas& c, bool cycle, bool zh) {
+  c.fill_round_rect(91, kQuotaTabsY, 284, kQuotaTabsHeight, 8, kTrack);
+  c.fill_round_rect(cycle ? 233 : 93, kQuotaTabsY + 2, 140, kQuotaTabsHeight - 4, 6,
+                    hg::rgb565(58, 74, 98));
+  const auto short_label = tr(zh, "Short-term", "短时");
+  const auto cycle_label = tr(zh, "Cycle", "周期");
+  text_at(c, 163 - text_width(short_label, 2) / 2, kQuotaTabsY + 8, short_label, 2, cycle ? kMuted : kBright);
+  text_at(c, 303 - text_width(cycle_label, 2) / 2, kQuotaTabsY + 8, cycle_label, 2, cycle ? kBright : kMuted);
+}
+
+void quotas(Canvas& c, const Value& data, size_t block, int64_t now, bool cycle, bool zh) {
+  quota_tabs(c, cycle, zh);
+  auto rows = quota_rows(data, cycle);
+  if (!rows.count) {
+    centered(c, 218, cycle ? tr(zh, "No cycle windows", "暂无周期额度")
+                           : tr(zh, "No short-term windows", "暂无短时额度"), 2, kMuted);
+    return;
+  }
+  std::stable_sort(rows.rows.begin(), rows.rows.begin() + rows.count, [now](const Value* left, const Value* right) {
+    const bool left_stale = quota_stale(*left, now), right_stale = quota_stale(*right, now);
+    if (left_stale != right_stale) return !left_stale;
+    return (*left)["pct"].as_number(101) < (*right)["pct"].as_number(101);
+  });
   const size_t start = block * kQuotaRows;
-  for (size_t index = start; index < std::min(rows.size(), start + kQuotaRows); ++index) {
-    const auto& row = rows[index];
-    const int y = 120 + static_cast<int>(index - start) * 50;
+  for (size_t index = start; index < std::min(rows.count, start + kQuotaRows); ++index) {
+    const auto& row = *rows.rows[index];
+    const int y = 154 + static_cast<int>(index - start) * 53;
     const int64_t reset = row["reset"].as_int();
-    const bool stale = row["stale"].as_bool() || (reset && reset <= now);
+    const bool stale = quota_stale(row, now);
     const double pct = row["pct"].as_number(-1);
     const bool known = pct >= 0 && pct <= 100;
     const bool low = known && pct < 25;
-    const auto label = row["label"].as_string();
-    const uint16_t identity = source_style(label).color;
-    card(c, y, 46);
-    c.fill_round_rect(82, y + 7, 4, 29, 2, identity);
-    name_at(c, 92, y + 4, label, 25);
+    const auto& label = row["label"].as_string();
+    const auto style = source_style(label);
+    const auto account = label.find(" #");
+    const auto title = style.label && account != label.npos ? style.label + label.substr(account) : label;
+    card(c, y, 47);
+    c.fill_round_rect(82, y + 7, 4, 29, 2, style.color);
+    name_at(c, 92, y + 4, title, 25);
     const int status_y = y + 25;
     const std::string amount = known
         ? std::string(low && !stale ? "! " : "") + std::to_string(static_cast<int>(std::round(pct))) + "%"
         : "--";
     right(c, 378, status_y, amount, 2, stale || low ? kWarning : kBright);
-    const std::string status = stale ? tr(zh, "Stale", "已过期")
-        : reset ? tr(zh, "Reset ", "重置 ") + age(reset - now, zh) : "";
-    name_at(c, 92, status_y, status, 16, stale ? kWarning : kMuted);
+    auto status = quota_caption(row, zh);
+    if (stale) status += tr(zh, " / Stale", " / 已过期");
+    else if (reset) status += " / " + age(reset - now, zh);
+    name_at(c, 92, status_y, status, 17, stale ? kWarning : kMuted);
     c.fill_rect(92, y + 43, 286, 2, kTrack);
     if (known && !stale) {
       const int filled = static_cast<int>(286 * pct / 100);
-      c.fill_rect(92, y + 43, filled, 2, low ? kWarning : identity);
+      c.fill_rect(92, y + 43, filled, 2, low ? kWarning : style.color);
     }
   }
-  if (rows.size() > kQuotaRows) centered(c, 374, tr(zh, "Swipe up for more", "上滑查看更多"), 2, kMuted);
+  if (rows.count > kQuotaRows) {
+    const auto page = std::to_string(block + 1) + "/" + std::to_string((rows.count + kQuotaRows - 1) / kQuotaRows);
+    centered(c, 374, page + tr(zh, "  Swipe up", "  上滑翻页"), 2, kMuted);
+  }
 }
 
 void trend(Canvas& c, const Value& rows, size_t detail, bool zh) {
@@ -359,7 +450,9 @@ bool TokenMonitor::ingest(std::string_view body, uint32_t now) {
       !next["today"].is_object() || !next["month"].is_object() ||
       !next["tools"].is_array() || next["tools"].size() > 4 ||
       !next["models"].is_array() || next["models"].size() > 4 ||
-      !next["limits"].is_array() || next["limits"].size() > 12 ||
+      !next["limits"].is_array() || next["limits"].size() > kLegacyQuotaRows ||
+      (!next["limitsMore"].is_null() &&
+       (!next["limitsMore"].is_array() || next["limitsMore"].size() > kLegacyQuotaRows)) ||
       !next["trend"].is_array() || next["trend"].size() > 30 ||
       !next["devices"].is_array() || next["devices"].size() > 12) {
     failure();
@@ -369,7 +462,7 @@ bool TokenMonitor::ingest(std::string_view body, uint32_t now) {
   received_at_ = now;
   failed_ = false;
   if (page_ == 1 || page_ == 3) {
-    const size_t count = data_[page_ == 1 ? "limits" : "devices"].size();
+    const size_t count = page_ == 1 ? quota_count() : data_["devices"].size();
     const size_t per_page = page_ == 1 ? kQuotaRows : kDeviceRows;
     detail_ = std::min(detail_, count ? (count - 1) / per_page : 0);
   }
@@ -391,6 +484,8 @@ void TokenMonitor::reset() {
 }
 
 const char* TokenMonitor::page_name() const { return settings_open_ ? "Settings" : kPages[page_]; }
+
+size_t TokenMonitor::quota_count() const { return quota_rows(data_, cycle_quotas_).count; }
 
 void TokenMonitor::open_settings(bool open) {
   settings_open_ = open;
@@ -423,7 +518,7 @@ void TokenMonitor::detail() {
   if (settings_open_) return;
   size_t pages = page_ == 2 ? 4 : 2;
   if (page_ == 1 || page_ == 3) {
-    const size_t count = data_[page_ == 1 ? "limits" : "devices"].size();
+    const size_t count = page_ == 1 ? quota_count() : data_["devices"].size();
     const size_t per_page = page_ == 1 ? kQuotaRows : kDeviceRows;
     pages = std::max<size_t>(1, (count + per_page - 1) / per_page);
   }
@@ -474,6 +569,12 @@ TouchAction TokenMonitor::touch(bool down, int x, int y, uint32_t now) {
     detail();
   } else if (tap) {
     if (header && short_tap) open_settings(true);
+    else if (page_ == 1 && short_tap && first_x_ >= 91 && first_x_ < 375 &&
+             first_y_ >= kQuotaTabsY && first_y_ < kQuotaTabsY + kQuotaTabsHeight) {
+      cycle_quotas_ = first_x_ >= 233;
+      detail_ = 0;
+      dirty_ = true;
+    }
     else if (first_y_ >= 391) refresh();
     else if (held < 550 && first_y_ >= 118) detail();
   }
@@ -509,7 +610,7 @@ void TokenMonitor::draw(hg::Display& display, uint32_t now, bool network, bool f
   if (present) {
     switch (page_) {
       case 0: overview(c, data_, detail_ != 0, zh); break;
-      case 1: quotas(c, data_["limits"], detail_, server_now, zh); break;
+      case 1: quotas(c, data_, detail_, server_now, cycle_quotas_, zh); break;
       case 2: trend(c, data_["trend"], detail_, zh); break;
       case 3: devices(c, data_["devices"], detail_, server_now, zh); break;
     }

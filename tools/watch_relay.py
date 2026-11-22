@@ -6,6 +6,7 @@ import hmac
 import ipaddress
 import json
 import os
+import re
 import threading
 import time
 import urllib.error
@@ -16,6 +17,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 SNAPSHOT_PATH = "/watch/v1/snapshot"
 MAX_SNAPSHOT_BYTES = 8192
 MAX_HUB_BYTES = 8 * 1024 * 1024
+LEGACY_QUOTA_ROWS = 12
+MAX_QUOTA_ROWS = 24
 
 
 def obj(value):
@@ -64,6 +67,39 @@ def totals(period):
     return {"tokens": number(period.get("totalTokens")), "cost": number(period.get("costUsd"))}
 
 
+def quota_period(window):
+    kind = str(window.get("kind") or "").strip().lower()
+    title = str(window.get("label") or "").lower()
+    duration = number(window.get("windowMinutes"), maximum=527_040)
+    minutes = int(duration) if duration and duration >= 1 else None
+    if kind == "credits":
+        return "unknown", None
+    if kind in ("monthly", "month") or (
+        kind == "billing" and ("month" in title or minutes and 40_320 <= minutes <= 44_640)
+    ):
+        return "month", minutes
+    if kind == "billing":
+        return "billing", minutes
+    if kind in ("weekly", "week"):
+        return "week", minutes
+    if kind in ("daily", "day"):
+        return "day", minutes
+    if kind == "session":
+        return "session", minutes
+    hours = re.fullmatch(r"(\d{1,2})(?:h|\s*[- ]\s*hours?)", kind or title)
+    if hours and 0 < int(hours[1]) < 24:
+        return "session", int(hours[1]) * 60
+    if re.search(r"\bmonthly\b", title) or minutes in (40_320, 43_200, 44_640):
+        return "month", minutes
+    if re.search(r"\bweekly\b", title) or minutes == 10_080:
+        return "week", minutes
+    if re.search(r"\bdaily\b", title) or minutes == 1440:
+        return "day", minutes
+    if minutes:
+        return ("session" if minutes < 1440 else "cycle"), minutes
+    return "unknown", None
+
+
 def quota_rows(stats, now):
     rows, unit_counts = [], {}
     for raw_provider in items(obj(stats.get("limits")).get("providers")):
@@ -87,15 +123,18 @@ def quota_rows(stats, now):
             window_name = label(window.get("label") or window.get("kind"), "Usage", 14)
             if remaining is None and reset is None:
                 continue
-            rows.append(
-                {
-                    "label": label(f"{name} #{account} {window_name}", "Quota", 26),
-                    "pct": remaining,
-                    "reset": reset,
-                    "stale": stale or (reset is not None and reset <= now),
-                }
-            )
-            if len(rows) == 12:
+            period, minutes = quota_period(window)
+            row = {
+                "label": label(f"{name} #{account} {window_name}", "Quota", 26),
+                "pct": remaining,
+                "reset": reset,
+                "stale": stale or (reset is not None and reset <= now),
+                "period": period,
+            }
+            if minutes is not None:
+                row["minutes"] = minutes
+            rows.append(row)
+            if len(rows) == MAX_QUOTA_ROWS:
                 return rows
     return rows
 
@@ -152,6 +191,7 @@ def snapshot(stats, history, now):
     if not isinstance(periods.get("today"), dict):
         raise ValueError("Hub response has no periods.today object")
     today = periods["today"]
+    limits = quota_rows(stats, now)
     return {
         "version": 1,
         "asOf": now,
@@ -159,7 +199,8 @@ def snapshot(stats, history, now):
         "month": totals(obj(periods.get("month"))),
         "tools": top(today, "clients", "clientCosts"),
         "models": top(today, "models", "modelCosts"),
-        "limits": quota_rows(stats, now),
+        "limits": limits[:LEGACY_QUOTA_ROWS],
+        "limitsMore": limits[LEGACY_QUOTA_ROWS:],
         "trend": trend_rows(history, now),
         "devices": device_rows(stats, now),
     }

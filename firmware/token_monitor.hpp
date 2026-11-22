@@ -31,6 +31,8 @@ class TokenMonitor {
   void reset();
   void next(int step);
   void detail();
+  bool cycle_quotas() const { return cycle_quotas_; }
+  size_t quota_count() const;
   void open_settings(bool open);
   void set_language(Language language);
   Language language() const { return language_; }
@@ -58,6 +60,7 @@ class TokenMonitor {
   bool combined_ = true;
   bool hidden_ = false;
   bool settings_open_ = false;
+  bool cycle_quotas_ = false;
   bool dirty_ = true;
   bool failed_ = false;
   bool network_ = false;
